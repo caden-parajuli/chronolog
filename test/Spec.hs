@@ -11,6 +11,7 @@ import qualified Spec.Engine.Library.AugmentDerivation
 import qualified Spec.Engine.Library.AugmentGoalTrace
 import qualified Spec.Engine.ExistentialVariables
 import qualified Spec.Engine.Indexing
+import qualified Spec.Engine.Parser
 import qualified Spec.Engine.Proof
 import qualified Spec.Engine.PruneAtRequiredGoalFailure
 import qualified Spec.Engine.RuleSpecificSuspend
@@ -37,6 +38,7 @@ tests =
       Spec.Engine.SolutionsCount.tests,
       Spec.Engine.Proof.tests,
       Spec.Engine.Indexing.tests,
+      Spec.Engine.Parser.tests,
       Spec.Engine.ApplicativeFunctorSubtyping.tests,
       Spec.Engine.Library.AugmentDerivation.tests,
       Spec.Engine.Library.AugmentGoalTrace.tests,

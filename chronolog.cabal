@@ -1,6 +1,6 @@
 cabal-version: 2.2
 
--- This file has been generated from package.yaml by hpack version 0.38.1.
+-- This file has been generated from package.yaml by hpack version 0.39.1.
 --
 -- see: https://github.com/sol/hpack
 
@@ -32,8 +32,10 @@ library
       Chronolog.Grammar
       Chronolog.Html
       Chronolog.Indexing
+      Chronolog.Lexer
       Chronolog.Library.AugmentDerivation
       Chronolog.Library.AugmentGoalTrace
+      Chronolog.Parser
       Chronolog.Unification
       Utility
   other-modules:
@@ -49,6 +51,9 @@ library
       OverloadedRecordDot
       DuplicateRecordFields
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints
+  build-tool-depends:
+      alex:alex
+    , happy:happy
   build-depends:
       array
     , base >=4.7 && <5
@@ -82,6 +87,9 @@ executable chronolog-exe
       OverloadedRecordDot
       DuplicateRecordFields
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints -threaded -rtsopts -with-rtsopts=-N
+  build-tool-depends:
+      alex:alex
+    , happy:happy
   build-depends:
       array
     , base >=4.7 && <5
@@ -119,6 +127,7 @@ test-suite chronolog-test
       Spec.Engine.Library.AugmentDerivation
       Spec.Engine.Library.AugmentGoalTrace
       Spec.Engine.Library.Common
+      Spec.Engine.Parser
       Spec.Engine.Proof
       Spec.Engine.PruneAtRequiredGoalFailure
       Spec.Engine.RuleSpecificSuspend
@@ -138,6 +147,9 @@ test-suite chronolog-test
       OverloadedRecordDot
       DuplicateRecordFields
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints -threaded -rtsopts -with-rtsopts=-N
+  build-tool-depends:
+      alex:alex
+    , happy:happy
   build-depends:
       array
     , base >=4.7 && <5
