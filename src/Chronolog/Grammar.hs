@@ -19,6 +19,7 @@ import Control.Monad (unless)
 import Control.Monad.Error.Class (MonadError (throwError))
 import Control.Monad.Writer (MonadWriter, tell)
 import Control.Newtype.Generics (Newtype, over)
+import Data.Char (toUpper, toLower)
 import Data.Function ((&))
 import Data.Functor ((<&>))
 import qualified Data.List.Safe as List
@@ -29,7 +30,7 @@ import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.String (IsString (fromString))
 import GHC.Generics (Generic)
-import Text.PrettyPrint (braces, brackets, comma, hang, hcat, hsep, nest, parens, punctuate, text, vcat, (<+>))
+import Text.PrettyPrint (braces, brackets, comma, hang, hcat, hsep, nest, parens, punctuate, text, vcat, (<+>), Doc)
 import Text.PrettyPrint.HughesPJClass (Pretty (pPrint))
 import Utility
 
@@ -74,6 +75,36 @@ mkRule' name hyps conc f_ruleOpts =
       ruleOpts = f_ruleOpts defaultRuleOpts
     }
 
+printRuleProlog :: Rule String String String -> Doc
+printRuleProlog (Rule name [] conc ruleOpts) =
+  vcat [
+    "%%" <+> pPrint name,
+    if ruleOpts.cutRuleOpt
+    then printAtomProlog conc <+>":- !."
+    else printAtomProlog conc <> "."
+  ]
+printRuleProlog (Rule name hyps conc ruleOpts) =
+  vcat [
+    "%%" <+> pPrint name,
+    hsep [
+      printAtomProlog conc,
+      ":-",
+      -- todo: existential vars
+      let textHyps = map printHypProlog hyps
+          clause = spacedCommas $ 
+                     if ruleOpts.cutRuleOpt
+                     then "!" : textHyps
+                     else textHyps
+       in if Set.null ruleOpts.existentialVarsRuleOpt
+          then clause
+          else hcat [
+                 parens . spacedCommas . (map pPrint) . Set.toList $ ruleOpts.existentialVarsRuleOpt,
+                 "^",
+                 clause
+               ]
+    ] <> "."
+  ]
+
 data RuleOpts a c v = RuleOpts
   { cutRuleOpt :: Bool,
     suspendRuleOpt :: Maybe (Goal a c v -> Bool),
@@ -113,6 +144,12 @@ instance (Pretty a, Pretty c, Pretty v) => Pretty (Hyp a c v) where
         pPrint g.atom,
         pPrint g.goalOpts
       ]
+
+printHypProlog :: Hyp String String String -> Doc
+printHypProlog (GoalHyp (Goal atom goalOpts _)) = 
+  if goalOpts.requiredGoalOpt
+  then "$" <> printAtomProlog atom
+  else printAtomProlog atom
 
 --------------------------------------------------------------------------------
 -- Goal
@@ -183,6 +220,14 @@ data Atom a c v = Atom {name :: a, args :: [Expr c v]}
 instance (Pretty a, Pretty c, Pretty v) => Pretty (Atom a c v) where
   pPrint (Atom c es) = pPrint c <+> (es <&> pPrint & hsep)
 
+printAtomProlog :: Atom String String String -> Doc
+printAtomProlog (Atom {name, args}) =
+  hcat [
+    text (applyFirst toLower name),
+    parens . spacedCommas . (map printExprProlog) $ args
+  ]
+
+
 --------------------------------------------------------------------------------
 -- Expr
 --------------------------------------------------------------------------------
@@ -198,6 +243,17 @@ instance (Pretty c, Pretty v) => Pretty (Expr c v) where
   pPrint (ConExpr c) = pPrint c
 
 instance (IsString v) => IsString (Expr c v) where fromString x = VarExpr (fromString x)
+
+printExprProlog :: Expr String String -> Doc
+printExprProlog (VarExpr (Var v Nothing)) = text (applyFirst toUpper v)
+printExprProlog (VarExpr (Var v (Just i))) = text (applyFirst toLower v) <> text (show i)
+printExprProlog (ConExpr (Con name [])) = 
+  text $ applyFirst toLower name
+printExprProlog (ConExpr (Con name args)) = 
+  hcat [
+    text $ applyFirst toLower name,
+    parens . spacedCommas . (map printExprProlog) $ args
+  ]
 
 --------------------------------------------------------------------------------
 -- Var

@@ -12,7 +12,7 @@ import Control.Monad (foldM, (>=>))
 import Data.Function ((&))
 import Data.Kind (Type)
 import Data.Traversable (for)
-import Text.PrettyPrint (Doc, comma, hcat, nest, punctuate, text, vcat, (<+>))
+import Text.PrettyPrint (Doc, comma, hcat, hsep, nest, punctuate, render, text, vcat, (<+>))
 
 -- | Infix application.
 --
@@ -64,6 +64,9 @@ bullets ds = ds & vcat . fmap (("-" <+>) . nest 4)
 
 commas :: [Doc] -> Doc
 commas = hcat . punctuate comma
+
+spacedCommas :: [Doc] -> Doc
+spacedCommas = hsep . punctuate comma
 
 extractAtIndex :: Int -> [a] -> Maybe ([a], a)
 extractAtIndex = go []
@@ -123,3 +126,10 @@ foldl' x f = foldl f x
 
 comps :: (Foldable f) => f (a -> a) -> a -> a
 comps = foldl (>>>) id
+
+applyFirst :: (a -> a) -> [a] -> [a]
+applyFirst _ [] = []
+applyFirst f (x : xs) = f x : xs
+
+applyFirstDoc :: (Char -> Char) -> Doc -> Doc
+applyFirstDoc f t = text . (applyFirst f) . render $ t

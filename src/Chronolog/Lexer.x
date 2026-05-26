@@ -32,6 +32,9 @@ token :-
   <0>         \)             { mkTokenEmpty Trparen     }
   <0>         \[             { mkTokenEmpty Tlbracket   }
   <0>         \]             { mkTokenEmpty Trbracket   }
+  <0>         \!             { mkTokenEmpty Tcut        }
+  <0>         \^             { mkTokenEmpty Tcut        }
+  <0>         \$             { mkTokenEmpty Trequire    }
   <0>         @var           { mkToken Tvar             }
   <0>         @name          { mkToken Tname            }
   <0>         @quote         { mkToken Tquote           }
@@ -53,7 +56,9 @@ data TokenClass =
       | Trparen
       | Tlbracket
       | Trbracket
-      | Tnewlines
+      | Tcut
+      | Tcaret
+      | Trequire
       | Tvar    String
       | Tname   String
       | Tquote  String
