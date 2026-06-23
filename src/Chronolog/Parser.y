@@ -8,9 +8,11 @@ module Chronolog.Parser where
 import Chronolog.Lexer
 
 import Control.Exception (Exception)
+import Data.Char (isSpace)
+import Data.List (dropWhileEnd, elemIndex, splitAt, drop, find)
+import Data.Maybe (fromMaybe)
 import Data.Set (Set)
 import qualified Data.Set as Set
-import Data.Text(Text,pack,unpack)
 import GHC.Exts (fromString, IsString)
 import qualified System.Environment as Env
 import Text.PrettyPrint.HughesPJClass (Pretty (pPrint))
@@ -20,13 +22,18 @@ import Chronolog.Grammar
 }
 
 %name       fileParser File
-%name       ruleParser Rule
+%name       ruleParser DocRule
 %name       queryParser Atom
+%name       exprParser Argument
 
 %tokentype { Token }
 %error     { parseError }
 %monad     { Alex }
 %lexer     { lexer } { Token _ _ TEOF }
+
+%right ','
+-- Avoid shift-reduce conflict for HypsCut
+%left '('
 
 %token
       ','     { Token _ _ Tcomma      }
@@ -42,29 +49,41 @@ import Chronolog.Grammar
       var     { Token _ _ (Tvar $$)   }
       name    { Token _ _ (Tname $$)  }
       quote   { Token _ _ (Tquote $$) }
+      doc     { Token _ _ (Tdoc $$)   }
 %%
 
-File :: { File String String String }
+File :: { File }
 : Rules { $1 }
 
-Rules :: { [Rule String String String] }
-: Rule Rules { $1 : $2 }
-| Rule       { [$1] }
+Rules :: { [DocRule] }
+: DocRule Rules { $1 : $2 }
+| DocRule       { [$1] }
+
+DocRule :: { DocRule }
+: Docs Rule  { DocRule $2{ name = fromString . fromMaybe "" . fmap snd $ find ((== "name") . fst) $1 } $1 }
+
+Docs :: { [(String, String)] }
+: {- empty -}   { [] }
+| Doc Docs      { $1 : $2 }
+
+Doc :: { (String, String) }
+: doc   { splitDoc $1 }
+
+Rule :: { Rule String String String }
+: Atom '.'                            { mkRule (fromString "") [] $1 }
+| Atom ':-' '!' '.'                   { mkRule' (fromString "") [] $1 (\r -> r{ cutRuleOpt = True }) }
+| Atom ':-' Existentials HypsCut '.'  { mkRule' (fromString "") (fst $4) $1 (\r -> r{ cutRuleOpt = snd $4, existentialVarsRuleOpt = $3 }) }
 
 -- Chronolog supports cut rules where the cut is at the beginning of the rule
-Rule :: { Rule String String String }
-: Atom '.'                                        { mkRule (fromString "") [] $1 }
-| Atom ':-' Existentials Hyps '.'                 { mkRule' (fromString "") $4 $1 (\r -> r{ existentialVarsRuleOpt = $3 }) }
-| Atom ':-' '!' '.'                               { mkRule' (fromString "") [] $1 (\r -> r{ cutRuleOpt = True }) }
-| Atom ':-' '!' ',' Existentials Hyps '.'         { mkRule' (fromString "") $6 $1 (\r -> r{ cutRuleOpt = True, existentialVarsRuleOpt = $5 }) }
-| Atom ':-' Existentials '(' '!' ',' Hyps ')' '.' { mkRule' (fromString "") $7 $1 (\r -> r{ cutRuleOpt = True, existentialVarsRuleOpt = $3 }) }
+HypsCut :: { ([Hyp String String String], Bool) }
+: Hyps                { ($1, False) }
+| '!' ',' Hyps        { ($3, True) }
+| '(' HypsCut ')'     { $2 }
 
--- todo: this parentheses handling is awful
 Hyps :: { [Hyp String String String] }
-: Hyp ',' Hyps         { $1 : $3  }
-| '(' Hyp ',' Hyps ')' { $2 : $4  }
+: Hyps ',' Hyps        { $1 ++ $3  }
 | Hyp                  { [$1] }
-| '(' Hyp ')'          { [$2] }
+| '(' Hyps ')'         { $2 }
 
 Hyp :: { Hyp String String String }
 : Atom     { GoalHyp (mkHypGoal $1) }
@@ -98,7 +117,7 @@ Con :: { Con String String }
 
 {
 
-type File a c v = [Rule a c v]
+type File = [DocRule]
 
 parseError :: Token -> Alex a
 parseError (Token _ (AlexPn p _ _) t) = alexError ("P" ++ show (p + 1))
@@ -112,8 +131,14 @@ instance Show ParseErrorMessage where
 
 instance Exception ParseErrorMessage
 
--- This is an ugly solution. The parser should be able to make use of the filename,
--- but Happy seems to choke on monadic actions when the rules are polymorphic
+data DocRule = DocRule (Rule String String String) [(String, String)]
+
+addNameRule :: String -> Rule a c v -> Rule a c v
+addNameRule name rule = 
+  if rule.name == fromString ""
+  then renameRule name rule
+  else rule
+
 renameRule :: String -> Rule a c v -> Rule a c v
 renameRule name rule = rule{ name = fromString name }
 
@@ -126,24 +151,26 @@ processParseRes res =
                     'P' -> Left (ParserError (tail s'));
                      _  -> Left (ParserError "0") -- This should never happen
 
-parse :: String -> String -> Either ParseErrorMessage (File String String String)
+parse :: String -> String -> Either ParseErrorMessage File
 parse filename s =
   let p = do
             alexSetFilename filename
             fileParser
   in case processParseRes (runAlex s p) of
        Left  l   -> Left l
-       -- Number the rules in the file
-       Right res -> Right $ map (\(i, rule) -> renameRule (show i) rule) (zip [1..] res)
+       -- Number the unnamed rules in the file
+       Right res -> Right $ map
+                              (\(i, (DocRule rule doc)) -> (DocRule (addNameRule (show i) rule) doc))
+                              $ zip [1..] res
 
-parseFile :: String -> IO (Either ParseErrorMessage (File String String String))
+parseFile :: String -> IO (Either ParseErrorMessage File)
 parseFile filename = do
   content <- readFile filename
   return $ case parse filename content of
              Left e -> Left e
              Right r -> Right r
 
-parseRule :: String -> String -> Either ParseErrorMessage (Rule String String String)
+parseRule :: String -> String -> Either ParseErrorMessage DocRule
 parseRule name s = 
   let p = (do
              alexSetFilename name
@@ -151,13 +178,13 @@ parseRule name s =
   in 
   case processParseRes (runAlex s p) of
       Left  l -> Left l
-      Right r  -> Right $ renameRule name r
+      Right (DocRule rule doc)  -> Right $ DocRule (addNameRule name rule) doc
 
-parseRule' :: String -> String -> (RuleOpts String String String -> RuleOpts String String String) -> Either ParseErrorMessage (Rule String String String)
+parseRule' :: String -> String -> (RuleOpts String String String -> RuleOpts String String String) -> Either ParseErrorMessage DocRule
 parseRule' name s f_ruleOpts = 
   case parseRule name s of
     Left  l   -> Left l
-    Right res -> Right $ res{ ruleOpts = f_ruleOpts defaultRuleOpts }
+    Right (DocRule rule doc) -> Right $ DocRule rule{ ruleOpts = f_ruleOpts defaultRuleOpts } doc
 
 
 parseQuery :: String -> Either ParseErrorMessage (Atom String String String)
@@ -165,6 +192,15 @@ parseQuery s =
   let p = (do
              alexSetFilename "query"
              queryParser)
+  in 
+  processParseRes (runAlex s $ p)
+
+
+parseExpr :: String -> Either ParseErrorMessage (Expr String String)
+parseExpr s = 
+  let p = (do
+             alexSetFilename "expr"
+             exprParser)
   in 
   processParseRes (runAlex s $ p)
 
@@ -180,12 +216,21 @@ mapNamesRule fa fc fv (Rule name hyps conc ruleOpts) =
       mapNamesRuleOpts (RuleOpts cutRuleOpt _ existentialVarsRuleOpt) = RuleOpts cutRuleOpt Nothing (Set.map fv existentialVarsRuleOpt)
 
       mapNamesAtom :: Atom a1 c1 v1 -> Atom a2 c2 v2
-      mapNamesAtom (Atom name args) = Atom (fa name) (map mapNamesExpr args)
+      mapNamesAtom (Atom name args) = Atom (fa name) (map (mapNamesExpr fc fv) args)
 
-      mapNamesExpr :: Expr c1 v1 -> Expr c2 v2
-      mapNamesExpr (ConExpr (Con name args)) = ConExpr (Con (fc name) (map mapNamesExpr args))
-      mapNamesExpr (VarExpr (Var labelVar indexVar)) = VarExpr (Var (fv labelVar) indexVar)
+mapNamesExpr :: (c1 -> c2) -> (v1 -> v2) -> Expr c1 v1 -> Expr c2 v2
+mapNamesExpr fc fv (ConExpr (Con name args)) = ConExpr (Con (fc name) (map (mapNamesExpr fc fv) args))
+mapNamesExpr fc fv (VarExpr (Var labelVar indexVar)) = VarExpr (Var (fv labelVar) indexVar)
 
+stripSpace :: String -> String
+stripSpace = dropWhileEnd isSpace . dropWhile isSpace
+
+splitDoc :: String -> (String, String)
+splitDoc s = 
+  case elemIndex ':' s of
+    Nothing -> ("", "")
+    Just i -> let (k, v) = splitAt i s
+               in (stripSpace k, stripSpace . drop 1 $ v)
 
 }
 

@@ -8,19 +8,21 @@ module Chronolog.Lexer where
 
 %wrapper "monadUserState"
 
-$int       = [0-9]
-$lowercase = [a-z]
-$uppercase = [A-Z]
-$alpha     = [$lowercase$uppercase]
-$varchar   = [$int$uppercase\_]
-$char      = [$int$alpha\_\']
-$empty     = [\ \t\f\v\r\n]
-$any       = [. \r \n]
+$int        = [0-9]
+$lowercase  = [a-z]
+$uppercase  = [A-Z]
+$alpha      = [$lowercase$uppercase]
+$varchar    = [$uppercase\_]
+$char       = [$int$alpha\_\']
+$empty      = [\ \t\f\v\r\n]
+$any        = [. \r \n]
+$noncomment = ~[\%]
 
 @var             = $varchar$char*
 @name            = $lowercase$char*
 @quote           = \"$char+\"
-@singlecomment   = "%".*\n
+@doccomment      = "%%".*\n
+@singlecomment   = "%"$empty.*\n
 @commentstart    = "/*"
 @commentend      = "*/"
 
@@ -33,13 +35,14 @@ token :-
   <0>         \[             { mkTokenEmpty Tlbracket   }
   <0>         \]             { mkTokenEmpty Trbracket   }
   <0>         \!             { mkTokenEmpty Tcut        }
-  <0>         \^             { mkTokenEmpty Tcut        }
+  <0>         \^             { mkTokenEmpty Tcaret      }
   <0>         \$             { mkTokenEmpty Trequire    }
   <0>         @var           { mkToken Tvar             }
   <0>         @name          { mkToken Tname            }
   <0>         @quote         { mkToken Tquote           }
   <0>         $empty+        { skip'                    }
   <0>         @singlecomment { skip'                    }
+  <0>         @doccomment    { mkDoc                    }
   <0,comment> @commentstart  { startComment             }
   <comment>   @commentend    { endComment               }
   <comment>   [.\n]          { skip'                    }
@@ -59,9 +62,10 @@ data TokenClass =
       | Tcut
       | Tcaret
       | Trequire
-      | Tvar    String
-      | Tname   String
-      | Tquote  String
+      | Tvar     String
+      | Tname    String
+      | Tquote   String
+      | Tdoc     String
       | TEOF
       deriving (Eq, Show)
 
@@ -75,6 +79,12 @@ mkToken c (p, _, _, input) len =
   do
     f <- alexGetFilename
     return $ Token f p (c (take len input))
+
+mkDoc :: AlexAction Token
+mkDoc (p, _, _, input) len =
+  do
+    f <- alexGetFilename
+    return . Token f p . Tdoc . drop 2 $ take len input
 
 mkTokenEmpty :: TokenClass -> AlexAction Token
 mkTokenEmpty c = mkToken (\ _ -> c)

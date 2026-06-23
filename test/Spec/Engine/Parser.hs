@@ -22,7 +22,7 @@ tests =
       mkParsingTest
         "SubtypingAppl"
         rulesSubtypingAppl
-        (parseQuery "subtype(0, \
+        (parseQuery "subtype(zero, \
                             \true, \
                             \type(N1, arrow(type(N2, const(nat)), type(N3, const(nat)))), \
                             \type(M1, arrow(type(M2, const(nat)), type(M3, const(nat)))), \
@@ -31,7 +31,7 @@ tests =
         EngineSuccess
     ]
 
-rulesSubtyping :: Either ParseErrorMessage [(Rule A C V)]
+rulesSubtyping :: Either ParseErrorMessage [DocRule]
 rulesSubtyping =
   parse "SubtypingSimple" "subtype(bool, bool). \n\
                           \subtype(int, int). \n\
@@ -39,7 +39,7 @@ rulesSubtyping =
                           \subtype(nat, int). \n\
                           \subtype(arr(A, B), arr(A', B')) :- subtype(A', A), subtype(B', B)."
 
-rulesSubtypingAppl :: Either ParseErrorMessage [(Rule A C V)]
+rulesSubtypingAppl :: Either ParseErrorMessage [DocRule]
 rulesSubtypingAppl =
   parse "SubtypingAppl" "% Type constants\n\
                         \constant(nat). \n\
@@ -63,26 +63,21 @@ rulesSubtypingAppl =
                         \     subtype(J, false, T2, T2p, L2, Coe2)."
 
 
-mkParsingTest :: TestName -> Either ParseErrorMessage [(Rule A C V)] -> Either ParseErrorMessage (Atom A C V) -> EngineResult C V -> TestTree
+mkParsingTest :: TestName -> Either ParseErrorMessage [DocRule] -> Either ParseErrorMessage (Atom A C V) -> EngineResult C V -> TestTree
 mkParsingTest testName parsedRules parsedGoal expected =
   case parsedRules of
-    Left (Left e) -> testCase testName (assertFailure e)
-    Left (Right e) -> testCase testName (assertFailure e)
+    Left e -> testCase testName . assertFailure $ "Rule parsing " ++ show e
     Right rules' -> case parsedGoal of
-                     Left (Left e) -> testCase testName (assertFailure e)
-                     Left (Right e) -> testCase testName (assertFailure e)
+                     Left e -> testCase testName . assertFailure $ "Query parsing " ++ show e
                      Right goal' -> mkTest_Engine
                                     testName
                                     (Engine.Config
                                        { initialGas = FiniteGas 50,
                                          strategy = DepthFirstStrategy defaultDepthFirstStrategyOpts,
-                                         rules = rules',
+                                         rules = map (\(DocRule rule _) -> rule) rules',
                                          exprAliases = [],
                                          goals = [mkGoal 0 goal'],
                                          shouldSuspend = const False,
-                                         -- shouldSuspend = \case
-                                         --   Goal {atom = VarExpr _ :<: VarExpr _} -> True
-                                         --   _ -> False,
                                          useIndexing = True
                                        }
                                     )
