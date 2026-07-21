@@ -78,14 +78,14 @@ mkRule' name hyps conc f_ruleOpts =
 printRuleProlog :: Rule String String String -> Doc
 printRuleProlog (Rule name [] conc ruleOpts) =
   vcat [
-    "%%" <+> pPrint name,
+    "%% name:" <+> pPrint name,
     if ruleOpts.cutRuleOpt
     then printAtomProlog conc <+>":- !."
     else printAtomProlog conc <> "."
   ]
 printRuleProlog (Rule name hyps conc ruleOpts) =
   vcat [
-    "%%" <+> pPrint name,
+    "%% name:" <+> pPrint name,
     hsep [
       printAtomProlog conc,
       ":-",
