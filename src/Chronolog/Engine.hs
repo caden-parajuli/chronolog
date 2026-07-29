@@ -1,3 +1,4 @@
+{-# LANGUAGE Strict #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE NamedFieldPuns #-}
@@ -40,10 +41,12 @@ import Data.Map (Map)
 import qualified Data.Map as Map
 import Data.Maybe (fromMaybe)
 import qualified Data.Set as Set
-import ListT (ListT, cons, toList)
+import Pipes (ListT, enumerate)
+import qualified Pipes.Prelude as PipesP
 import Text.PrettyPrint.HughesPJClass (Doc, Pretty (pPrint), hang, hcat, text, (<+>))
 import Utility
 import Prelude hiding (init)
+
 
 --------------------------------------------------------------------------------
 -- types
@@ -108,6 +111,12 @@ type T a c v m =
 
 liftT :: (Monad m) => Common.T m x -> T a c v m x
 liftT = lift . lift . lift . lift . lift . lift
+
+cons :: Monad m => a -> ListT m a -> ListT m a
+cons a l = return a <> l
+
+listTtoList :: Monad m => ListT m a -> m [a]
+listTtoList = (PipesP.toListM . enumerate)
 
 type T' a c v m =
   (ReaderT (Ctx a c v))
@@ -334,7 +343,7 @@ runEnv cfg env0 = do
     start
       & (`runReaderT` mkCtx cfg)
       & (`execStateT` env0)
-      & ListT.toList
+      & listTtoList
       & (`evalStateT` cfg.initialGas)
       & runExceptT
 

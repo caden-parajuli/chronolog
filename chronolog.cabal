@@ -59,11 +59,11 @@ library
     , base >=4.7 && <5
     , containers
     , lens
-    , list-t
     , listsafe
     , mtl
     , newtype-generics
     , parallel
+    , pipes
     , pretty
     , singletons
     , singletons-th
@@ -97,12 +97,12 @@ executable chronolog-exe
     , containers
     , filepath
     , lens
-    , list-t
     , listsafe
     , mtl
     , newtype-generics
     , parallel
     , parseargs
+    , pipes
     , pretty
     , singletons
     , singletons-th
@@ -157,11 +157,11 @@ test-suite chronolog-test
     , containers
     , filepath
     , lens
-    , list-t
     , listsafe
     , mtl
     , newtype-generics
     , parallel
+    , pipes
     , pretty
     , singletons
     , singletons-th
