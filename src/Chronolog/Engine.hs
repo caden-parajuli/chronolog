@@ -61,13 +61,14 @@ import Prelude hiding (init)
 -- many rule heads, such as something like `IsTrue a` (where `a` might be
 -- constrained in other goals).
 data Config a c v = Config
-  { initialGas :: Gas,
+  { initialGas :: {-# UNPACK #-} !Gas,
     rules :: [Rule a c v],
     goals :: [Goal a c v],
     shouldSuspend :: Goal a c v -> Bool,
     exprAliases :: [ExprAlias c v],
-    strategy :: Strategy,
-    useIndexing :: Bool
+    strategy :: {-# UNPACK #-} !Strategy,
+    useIndexing :: !Bool,
+    doLogging :: !Bool
   }
 
 defaultConfig :: Config a c v
@@ -79,7 +80,8 @@ defaultConfig =
       shouldSuspend = const False,
       exprAliases = [],
       strategy = DepthFirstStrategy defaultDepthFirstStrategyOpts,
-      useIndexing = True
+      useIndexing = True,
+      doLogging = False
     }
 
 instance (Pretty a, Pretty c, Pretty v) => Pretty (Config a c v) where
@@ -91,7 +93,8 @@ instance (Pretty a, Pretty c, Pretty v) => Pretty (Config a c v) where
         "shouldSuspend =" <+> text "<function>",
         "exprAliases =" <+> text "<function>",
         "strategy =" <+> pPrint cfg.strategy,
-        "useIndexing =" <+> pPrint cfg.useIndexing
+        "useIndexing =" <+> pPrint cfg.useIndexing,
+        "doLogging =" <+> pPrint cfg.doLogging
       ]
 
 type T a c v m =
@@ -176,8 +179,8 @@ instance (Pretty a, Pretty c, Pretty v) => Pretty (Ctx a c v) where
 
 -- | Engine environment
 data Env a c v = Env
-  { freshCounter_vars :: Int,
-    freshCounter_goals :: Int,
+  { freshCounter_vars :: !Int,
+    freshCounter_goals :: !Int,
     rules :: [Rule a c v],
     pathIndex :: Indexing.Trie a c v,
     activeGoals :: [Goal a c v],
@@ -220,7 +223,7 @@ data Strategy
     -- A depth-first strategy:
     --   - subgoals are inserted at the beginning of the list of subgoals to
     --     solve next, so they are to be solved before any pre-existing subgoals
-    DepthFirstStrategy DepthFirstStrategyOpts
+    DepthFirstStrategy {-# UNPACK #-} !DepthFirstStrategyOpts
   deriving (Eq, Show)
 
 instance Pretty Strategy where
@@ -229,7 +232,7 @@ instance Pretty Strategy where
 data DepthFirstStrategyOpts = DepthFirstStrategyOpts
   { -- | Whether or not to consider failing branches. `agressive == True`
     -- essentially implies that all goals are treated as required.
-    aggressiveDepthFirstStrategyOpt :: Bool
+    aggressiveDepthFirstStrategyOpt :: !Bool
   }
   deriving (Eq, Show)
 
@@ -250,7 +253,7 @@ instance Pretty Error where
   pPrint OutOfGas = "out of gas"
 
 data Gas
-  = FiniteGas Int
+  = FiniteGas !Int
   | InfiniteGas
   deriving (Eq, Show)
 
@@ -269,7 +272,7 @@ decrementGas InfiniteGas = InfiniteGas
 data Step a c v
   = ApplyRuleStep
       { goal :: Goal a c v,
-        ruleName :: RuleName,
+        ruleName :: {-# UNPACK #-} !RuleName,
         sigma :: Subst c v,
         subgoals :: [Goal a c v]
       }
@@ -328,7 +331,7 @@ runConfig ::
   Config a c v ->
   WriterT (Trace a c v) (Common.T m) (Either (Error, Env a c v) [Env a c v])
 runConfig cfg = do
-  lift $ Writer.tell [Msg.mk 0 "Engine.run"]
+  lift $ when (cfg.doLogging) $ Writer.tell [Msg.mk 0 "Engine.run"]
   let env0 = mkEnv cfg
   runEnv cfg env0
 
@@ -518,7 +521,8 @@ tryRule goal rule = do
       )
         & ( `runReaderT`
               Unification.Ctx
-                { exprAliases = ctx.config.exprAliases
+                { exprAliases = ctx.config.exprAliases,
+                  doLogging = ctx.config.doLogging
                 }
           )
         & runExceptT
@@ -714,29 +718,36 @@ extractNextActiveGoal =
       return $ Just goal
 
 tellMsgs :: (Monad m) => [Msg] -> T a c v m ()
-tellMsgs = lift . lift . lift . lift . lift . lift . Writer.tell
+tellMsgs msgs = do 
+  ctx <- ask
+  when ctx.config.doLogging
+    $ lift . lift . lift . lift . lift . lift . Writer.tell $ msgs
 
 tell_traceStep :: (Monad m) => Step a c v -> T a c v m ()
-tell_traceStep step =
-  lift . lift . lift . Writer.tell $
-    Trace
-      { traceSteps = Map.singleton step.goal.goalIndex [step],
-        traceGoals =
-          Map.fromList
-            [ (g.goalIndex, g)
-              | g <- case step of
-                  ApplyRuleStep {..} -> subgoals
-                  FailureStep {} -> []
-                  SuspendStep {} -> []
-                  ResumeStep {} -> []
-                  SolveStep {} -> []
-            ]
-      }
+tell_traceStep step = do
+  ctx <- ask
+  when (ctx.config.doLogging)
+    $ lift . lift . lift . Writer.tell $
+        Trace
+          { traceSteps = Map.singleton step.goal.goalIndex [step],
+            traceGoals =
+              Map.fromList
+                [ (g.goalIndex, g)
+                  | g <- case step of
+                      ApplyRuleStep {..} -> subgoals
+                      FailureStep {} -> []
+                      SuspendStep {} -> []
+                      ResumeStep {} -> []
+                      SolveStep {} -> []
+                ]
+          }
 
 tell_traceGoals :: (Monad m) => [Goal a c v] -> T a c v m ()
-tell_traceGoals goals =
-  lift . lift . lift . Writer.tell $
-    Trace
-      { traceSteps = Map.empty,
-        traceGoals = Map.fromList [(g.goalIndex, g) | g <- goals]
-      }
+tell_traceGoals goals = do
+  ctx <- ask
+  when ctx.config.doLogging
+    $ lift . lift . lift . Writer.tell $
+         Trace
+           { traceSteps = Map.empty,
+             traceGoals = Map.fromList [(g.goalIndex, g) | g <- goals]
+           }

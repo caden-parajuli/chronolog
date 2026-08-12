@@ -24,7 +24,7 @@ import Prelude hiding ((<>))
 
 -- For the purposes of indexing, all variable instances are distinct,
 -- i.e. we treat all terms as linear.
-data PathStringPart a c v = Pos Int | At a | Co c | Va
+data PathStringPart a c v = Pos !Int | At a | Co c | Va
   deriving (Show, Eq, Ord)
 
 type PathString a c v = [PathStringPart a c v]

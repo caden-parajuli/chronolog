@@ -12,8 +12,8 @@ import Utility
 
 data Env c v = Env
   { sigma :: Subst c v,
-    freshCounter_vars :: Int,
-    freshCounter_goals :: Int,
+    freshCounter_vars :: !Int,
+    freshCounter_goals :: !Int,
     existentialVars :: Set v
   }
 

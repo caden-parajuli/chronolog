@@ -45,8 +45,10 @@ type T a c v m =
 liftT :: (Monad m) => Common.T m a -> T a c v m a
 liftT = lift . lift . lift
 
-newtype Ctx c v = Ctx
-  {exprAliases :: [ExprAlias c v]}
+data Ctx c v = Ctx
+  { exprAliases :: [ExprAlias c v],
+    doLogging :: !Bool
+  }
 
 data Env c v = Env
   { _sigma :: Subst c v
@@ -97,14 +99,16 @@ unifyExpr :: (Monad m, Ord v, Eq c, Pretty v, Pretty c) => Expr c v -> Expr c v 
 unifyExpr e1 e2 = do
   e1' <- normExpr e1
   e2' <- normExpr e2
-  tell
-    [ (Msg.mk 5 "unifyExpr")
-        { Msg.contents =
-            [ "e1 =" <+> pPrint e1',
-              "e2 =" <+> pPrint e2'
-            ]
-        }
-    ]
+  ctx <- ask
+  when (ctx.doLogging)
+    $ tell
+       [ (Msg.mk 5 "unifyExpr")
+           { Msg.contents =
+               [ "e1 =" <+> pPrint e1',
+                 "e2 =" <+> pPrint e2'
+               ]
+           }
+       ]
   unifyExpr' e1' e2'
 
 unifyExpr' :: (Monad m, Ord v, Eq c, Pretty v, Pretty c) => Expr c v -> Expr c v -> T a c v m (Expr c v)
@@ -117,8 +121,8 @@ unifyExpr' e1 (VarExpr x2) = do
   return e1
 unifyExpr' e1@(ConExpr (Con _ _)) e2@(ConExpr (Con _ _)) = do
   ctx <- ask
-  e1' <- normHeadAliasesInExpr ctx.exprAliases e1
-  e2' <- normHeadAliasesInExpr ctx.exprAliases e2
+  e1' <- normHeadAliasesInExpr ctx.exprAliases ctx.doLogging e1
+  e2' <- normHeadAliasesInExpr ctx.exprAliases ctx.doLogging e2
   case (e1', e2') of
     (VarExpr x1, _) -> do
       setVarM x1 e2'
@@ -156,7 +160,9 @@ normEnv = do
 
 setVarM :: (Monad m, Ord v, Eq c, Pretty v, Pretty c) => Var v -> Expr c v -> T a c v m ()
 setVarM x e = do
-  tell [Msg.mk 4 $ "setVarM" <+> pPrint x <+> pPrint e]
+  ctx <- ask
+  when (ctx.doLogging)
+    $ tell [Msg.mk 4 $ "setVarM" <+> pPrint x <+> pPrint e]
   -- if 'x' occurs in 'e', then is a cyclic substitution, which is inconsistent
   when (Set.member x (varsExpr e)) do throwError $ ExprsError (VarExpr x) e
   e' <-
@@ -165,6 +171,7 @@ setVarM x e = do
       -- if 'x' is already substituted, then must unify the old substitute 'e'
       -- with the new substitute 'e''
       Just e' -> do
-        tell [Msg.mk 4 $ "[setVarM]" <+> pPrint x <+> "was already substituted, so must check: " <+> pPrint e <+> "~" <+> pPrint e']
+        when (ctx.doLogging)
+          $ tell [Msg.mk 4 $ "[setVarM]" <+> pPrint x <+> "was already substituted, so must check: " <+> pPrint e <+> "~" <+> pPrint e']
         unifyExpr e e'
   sigma %= setVar x e'

@@ -3,6 +3,7 @@
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE PatternSynonyms #-}
+{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# OPTIONS_GHC -Wno-missing-export-lists #-}
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
@@ -15,7 +16,7 @@ module Chronolog.Grammar where
 import Chronolog.Common.Msg (Msg)
 import qualified Chronolog.Common.Msg as Msg
 import Control.Applicative ((<|>))
-import Control.Monad (unless)
+import Control.Monad (unless, when)
 import Control.Monad.Error.Class (MonadError (throwError))
 import Control.Monad.Writer (MonadWriter, tell)
 import Control.Newtype.Generics (Newtype, over)
@@ -40,10 +41,10 @@ import Utility
 
 -- | Rule
 data Rule a c v = Rule
-  { name :: RuleName,
+  { name :: {-# UNPACK #-} !RuleName,
     hyps :: [Hyp a c v],
     conc :: Atom a c v,
-    ruleOpts :: RuleOpts a c v
+    ruleOpts :: {-# UNPACK #-} !(RuleOpts a c v)
   }
 
 instance (Pretty a, Pretty c, Pretty v) => Pretty (Rule a c v) where
@@ -106,8 +107,8 @@ printRuleProlog (Rule name hyps conc ruleOpts) =
   ]
 
 data RuleOpts a c v = RuleOpts
-  { cutRuleOpt :: Bool,
-    suspendRuleOpt :: Maybe (Goal a c v -> Bool),
+  { cutRuleOpt :: !Bool,
+    suspendRuleOpt :: {-# UNPACK #-} !(Maybe (Goal a c v -> Bool)),
     existentialVarsRuleOpt :: Set v
   }
 
@@ -134,7 +135,7 @@ defaultRuleOpts =
 -- other kinds of hypotheses, such as functional predicates (predicates that are
 -- checked by executing a `Bool`-valued function.)
 data Hyp a c v
-  = GoalHyp (Goal a c v)
+  = GoalHyp {-# UNPACK #-} !(Goal a c v)
   deriving (Show, Eq)
 
 instance (Pretty a, Pretty c, Pretty v) => Pretty (Hyp a c v) where
@@ -158,8 +159,8 @@ printHypProlog (GoalHyp (Goal atom goalOpts _)) =
 -- | A `Goal` is an `Atom` along with any other goal-relevant options and metadata.
 data Goal a c v = Goal
   { atom :: Atom a c v,
-    goalOpts :: GoalOpts,
-    goalIndex :: GoalIndex
+    goalOpts :: {-# UNPACK #-} !GoalOpts,
+    goalIndex :: {-# UNPACK #-} !GoalIndex
   }
   deriving (Show, Eq)
 
@@ -174,7 +175,7 @@ instance (Pretty a, Pretty c, Pretty v) => Pretty (Goal a c v) where
 type GoalIndex = Maybe Int
 
 data GoalOpts = GoalOpts
-  { requiredGoalOpt :: Bool,
+  { requiredGoalOpt :: !Bool,
     constrainedRulesetGoalOpt :: Maybe (Set RuleName)
   }
   deriving (Show, Eq)
@@ -234,8 +235,8 @@ printAtomProlog (Atom {name, args}) =
 
 -- | Expression
 data Expr c v
-  = ConExpr (Con c v)
-  | VarExpr (Var v)
+  = ConExpr {-# UNPACK #-} !(Con c v)
+  | VarExpr {-# UNPACK #-} !(Var v)
   deriving (Show, Eq, Ord)
 
 instance (Pretty c, Pretty v) => Pretty (Expr c v) where
@@ -264,7 +265,7 @@ printExprProlog (ConExpr (Con name args)) =
 -- freshened automatically for variables inside `Rule`s.
 data Var v = Var
   { labelVar :: v,
-    indexVar :: Maybe Int
+    indexVar :: {-# UNPACK #-} !(Maybe Int)
   }
   deriving (Show, Eq, Ord)
 
@@ -357,9 +358,8 @@ applyExprAlias :: [ExprAlias c v] -> Expr c v -> Maybe (Expr c v)
 applyExprAlias aliases e = foldr (\(ExprAlias f) -> (f e <|>)) Nothing aliases
 
 normAliasesInGoal :: (MonadWriter [Msg] m) => [ExprAlias c v] -> Goal a c v -> m (Goal a c v)
-normAliasesInGoal exprAliases goal = do
-  let atom = normAliasesInAtom exprAliases goal.atom
-  return goal {atom}
+normAliasesInGoal exprAliases goal =
+  return goal { atom = normAliasesInAtom exprAliases goal.atom }
 
 normAliasesInAtom :: [ExprAlias c v] -> Atom a c v -> Atom a c v
 normAliasesInAtom exprAliases (Atom a es) = Atom a $ map (normAliasesInExpr exprAliases) es
@@ -381,20 +381,21 @@ normAliasesInExpr exprAliases e0 = do
     Nothing -> e0
     Just e' -> normAliasesInExpr exprAliases e'
 
-normHeadAliasesInExpr :: forall c v m. (MonadWriter [Msg] m, Pretty c, Pretty v) => [ExprAlias c v] -> Expr c v -> m (Expr c v)
-normHeadAliasesInExpr exprAliases e = do
+normHeadAliasesInExpr :: forall c v m. (MonadWriter [Msg] m, Pretty c, Pretty v) => [ExprAlias c v] -> Bool -> Expr c v -> m (Expr c v)
+normHeadAliasesInExpr exprAliases !doLogging e = do
   case exprAliases `applyExprAlias` e of
     Nothing -> return e
     Just e' -> do
-      tell
-        [ (Msg.mk 3 "unfolded alias")
-            { Msg.contents =
-                [ "before :" <+> pPrint e,
-                  "after  :" <+> pPrint e'
-                ]
-            }
-        ]
-      normHeadAliasesInExpr exprAliases e'
+      when doLogging
+        $ tell
+            [ (Msg.mk 3 "unfolded alias")
+                { Msg.contents =
+                    [ "before :" <+> pPrint e,
+                      "after  :" <+> pPrint e'
+                    ]
+                }
+            ]
+      normHeadAliasesInExpr exprAliases doLogging e'
 
 --------------------------------------------------------------------------------
 -- Names

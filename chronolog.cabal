@@ -50,7 +50,8 @@ library
       GADTs
       OverloadedRecordDot
       DuplicateRecordFields
-  ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints
+      BangPatterns
+  ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints -funbox-small-strict-fields
   build-tool-depends:
       alex:alex
     , happy:happy
@@ -86,7 +87,8 @@ executable chronolog-exe
       GADTs
       OverloadedRecordDot
       DuplicateRecordFields
-  ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints -threaded -rtsopts -with-rtsopts=-N
+      BangPatterns
+  ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints -funbox-small-strict-fields -threaded -rtsopts -with-rtsopts=-N
   build-tool-depends:
       alex:alex
     , happy:happy
@@ -146,7 +148,8 @@ test-suite chronolog-test
       GADTs
       OverloadedRecordDot
       DuplicateRecordFields
-  ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints -threaded -rtsopts -with-rtsopts=-N
+      BangPatterns
+  ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints -funbox-small-strict-fields -threaded -rtsopts -with-rtsopts=-N
   build-tool-depends:
       alex:alex
     , happy:happy
