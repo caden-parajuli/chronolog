@@ -16,7 +16,18 @@
 {-# HLINT ignore "Use if" #-}
 {-# OPTIONS_GHC -Wno-unused-do-bind #-}
 
-module Chronolog.Engine where
+module Chronolog.Engine
+  ( T,
+    Config (..), runConfig,
+    Env (..), mkEnv, runEnv, substEnv,
+    Step (..),
+    Strategy (BreadthFirstStrategy, DepthFirstStrategy), defaultDepthFirstStrategyOpts,
+    Trace (..),
+    Error,
+    Gas (..), decrementGas,
+    DepthFirstStrategyOpts (..), mkCtx, runFreshening, listTtoList,
+  )
+where
 
 import qualified Chronolog.Common as Common
 import Chronolog.Common.Msg (Msg)
@@ -630,7 +641,6 @@ tryRule goal rule = do
           suspendedGoals_curr <- gets suspendedGoals
 
           (activeGoals_resumed, suspendedGoals_new) <- do
-            env <- get
             zip suspendedGoals_old suspendedGoals_curr
               & foldM
                 ( \(activeGoals_resumed, suspendedGoals_new) (suspendedGoal_old, suspendedGoal_curr) -> do
@@ -638,24 +648,19 @@ tryRule goal rule = do
                       -- if the suspended goal was NOT refined by the substitution, then leave it suspended
                       True -> do
                         return (activeGoals_resumed, suspendedGoal_curr : suspendedGoals_new)
-                      False
-                        -- if the suspended goal was refined by the substitution, but ALL of the rules in its constrained ruleset would just suspend it again, then don't resume it
-                        | Just rns <- suspendedGoal_curr.goalOpts.constrainedRulesetGoalOpt,
-                          env.rules & all \r -> r.name `notElem` rns || (r.ruleOpts.suspendRuleOpt & maybe False ($ suspendedGoal_curr)) ->
-                            return (activeGoals_resumed, suspendedGoal_curr : suspendedGoals_new)
-                        -- if the suspended goal was refined by the substitution, and SOME rule in its constrained ruleset can apply, then resume it
-                        | otherwise -> do
-                            tell_traceStep
-                              ResumeStep
-                                { goal = suspendedGoal_curr,
-                                  reason = "the suspended goal was refined by a new substitution:" <+> pPrint sigma_uni
-                                }
-                            tellMsgs
-                              [ (Msg.mk 2 "resume goal")
-                                  { Msg.contents = [pPrint suspendedGoal_curr]
-                                  }
-                              ]
-                            return (suspendedGoal_curr : activeGoals_resumed, suspendedGoals_new)
+                      -- if the suspended goal was refined by the substitution, then resume it
+                      False -> do
+                        tell_traceStep
+                          ResumeStep
+                            { goal = suspendedGoal_curr,
+                              reason = "the suspended goal was refined by a new substitution:" <+> pPrint sigma_uni
+                            }
+                        tellMsgs
+                          [ (Msg.mk 2 "resume goal")
+                              { Msg.contents = [pPrint suspendedGoal_curr]
+                              }
+                          ]
+                        return (suspendedGoal_curr : activeGoals_resumed, suspendedGoals_new)
                 )
                 ([], [])
           modify \env ->

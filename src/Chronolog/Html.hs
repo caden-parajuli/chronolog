@@ -3,13 +3,18 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# OPTIONS_GHC -Wno-missing-export-lists #-}
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
+{-# OPTIONS_GHC -Wno-unused-top-binds #-}
 
 {-# HLINT ignore "Redundant bracket" #-}
 {-# HLINT ignore "Redundant $" #-}
 {-# HLINT ignore "Avoid lambda using `infix`" #-}
 {-# HLINT ignore "Use ++" #-}
 
-module Chronolog.Html where
+module Chronolog.Html
+  ( renderHtml,
+    renderTrace,
+  )
+where
 
 import Control.Monad (when)
 import Control.Monad.State (State, execState, get, modify)

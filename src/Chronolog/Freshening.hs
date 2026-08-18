@@ -1,7 +1,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# OPTIONS_GHC -Wno-missing-export-lists #-}
 
-module Chronolog.Freshening where
+module Chronolog.Freshening (M, Env(..), freshenRule, freshenVar) where
 
 import Control.Monad.State (MonadState (..), State, modify)
 import Chronolog.Grammar

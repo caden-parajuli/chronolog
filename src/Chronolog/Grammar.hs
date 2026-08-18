@@ -7,11 +7,27 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# OPTIONS_GHC -Wno-missing-export-lists #-}
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
+{-# OPTIONS_GHC -Wno-unused-top-binds #-}
 
 {-# HLINT ignore "Use newtype instead of data" #-}
 {-# HLINT ignore "Use ++" #-}
 
-module Chronolog.Grammar where
+module Chronolog.Grammar
+  ( Rule (..), mkRule, mkRule', printRuleProlog, unRuleName,
+    RuleOpts (..), defaultRuleOpts,
+    RuleName (..),
+    Goal (..), mkGoal, mkHypGoal,
+    GoalOpts (..), defaultGoalOpts,
+    GoalIndex,
+    Hyp (..),
+    Atom (..), varsAtom,
+    Expr (..), mkVarExpr, mkConExpr, varsExpr,
+    Var (..),
+    Con (..), pattern (:%),
+    Subst (..), substRule, substGoal, substExpr, substVar, setVar, emptySubst, unSubst, composeSubst_unsafe,
+    ExprAlias (..), normAliasesInGoal, normAliasesInAtom, normHeadAliasesInExpr,
+  )
+where
 
 import Chronolog.Common.Msg (Msg)
 import qualified Chronolog.Common.Msg as Msg

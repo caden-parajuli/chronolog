@@ -3,7 +3,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# OPTIONS_GHC -Wno-missing-export-lists #-}
 
-module Chronolog.Indexing where
+module Chronolog.Indexing (Trie (..), emptyTrie, buildIndex, filterPathIndexing) where
 
 import Chronolog.Grammar as G
 import Control.Monad.State (MonadState (put), evalState, get)
@@ -98,9 +98,9 @@ newTrie :: Rule a c v -> PathString a c v -> Trie a c v
 newTrie rule [] = Node (Map.singleton Nothing (Leaf (trieSetSingleton rule)))
 newTrie rule (part : rest) = Node (Map.singleton (Just part) (newTrie rule rest))
 
-trieType :: Trie a c v -> String
-trieType (Leaf _) = "leaf"
-trieType (Node _) = "node"
+_trieType :: Trie a c v -> String
+_trieType (Leaf _) = "leaf"
+_trieType (Node _) = "node"
 
 --------------------------------------------------------------------------------
 -- FastGoal
@@ -234,8 +234,8 @@ filterPathIndexing aliases goal trie =
                         [0 .. (Vector.length fastGoal.exprs - 1)]
 
 -- | Generates a tree representation to be rendered by Graphviz dot
-genGraphviz :: (Show a, Show c) => Trie a c v -> String
-genGraphviz trie =
+_genGraphviz :: (Show a, Show c) => Trie a c v -> String
+_genGraphviz trie =
   let getNext = do
         i <- get
         put (succ i)

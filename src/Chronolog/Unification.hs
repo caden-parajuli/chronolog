@@ -10,7 +10,7 @@
 {-# HLINT ignore "Use newtype instead of data" #-}
 {-# HLINT ignore "Redundant $" #-}
 
-module Chronolog.Unification where
+module Chronolog.Unification (Ctx (..), emptyEnv, normEnv, unifyAtom, sigma) where
 
 import Control.Lens (makeLenses, (%=), (.=), (^.))
 import Control.Monad (when, zipWithM)
