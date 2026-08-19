@@ -17,6 +17,7 @@ module Chronolog.Unification (Ctx (..), runUnificationT, emptyEnv, normEnv, unif
 
 import Control.Lens (makeLenses, (%=), (.=), (^.))
 import Control.Monad (when, zipWithM, ap, liftM)
+import Control.Monad.Cont (Cont, cont, runCont)
 import Control.Monad.Except (MonadError, throwError, catchError)
 import Control.Monad.Reader (MonadReader, ask, local)
 import Control.Monad.State (MonadState, gets, get, put)
@@ -30,33 +31,29 @@ import qualified Data.Set as Set
 import Text.PrettyPrint (hang, (<+>))
 import Text.PrettyPrint.HughesPJClass (Pretty (pPrint))
 import Utility (bullets, fixpointEqM, (=<<$>))
+import Debug.Trace (trace, traceShow)
 
 --------------------------------------------------------------------------------
--- Types
+-- Unification monad
 --------------------------------------------------------------------------------
 
--- type UnificationT a c v m =
---   ( (ReaderT (Ctx c v))
---       ( (ExceptT (Error a c v))
---           ( (StateT (Env c v))
---               (Common.T m)
---           )
---       )
---   )
-
-{-# INLINE runUnificationT #-}
-runUnificationT :: Env c v -> Ctx c v -> UnificationT a c v m b -> Common.T m (Either (Error a c v) b, Env c v)
-runUnificationT env ctx m = runUniMonad m ctx env
-
+-- Holds a global Ctx, throws Error exceptions, uses Env as state, and produces Common.T m actions
 type UnificationT a c v m = UniMonad (Ctx c v) (Error a c v) (Env c v) (Common.T m)
 
-newtype UniMonad r e s m a = UniMonad { runUniMonad :: r -> s -> m (Either e a, s) }
+{-# INLINE runUnificationT #-}
+runUnificationT :: Monad m => Env c v -> Ctx c v -> UnificationT a c v m b -> Common.T m (Either (Error a c v) b, Env c v)
+runUnificationT env ctx m = runCont (runUniMonad m) (\b _ s -> return (Right b, s)) ctx env
+
+-- CPS version of: ReaderT r (ExceptT e (StateT s m))
+newtype UniMonad r e s m a = UniMonad {
+  runUniMonad :: forall res. Cont (r -> s -> m (Either e res, s)) a
+}
 
 instance (Monad m) => Functor (UniMonad r e s m) where
   fmap = liftM
 
 instance (Monad m) => Applicative (UniMonad r e s m) where
-  pure x = UniMonad $ \_ s -> return (Right x, s)
+  pure x = UniMonad (return x)
   (<*>)  = ap
 
 instance (Monad m) => Monad (UniMonad r e s m) where
@@ -64,45 +61,46 @@ instance (Monad m) => Monad (UniMonad r e s m) where
   (>>=)  = bindUniMonad
 
 instance forall r e s m. (Monad m) => MonadReader r (UniMonad r e s m) where
-  ask = UniMonad $ \r s -> return (Right r, s)
-  local f m = UniMonad $ \r s -> runUniMonad m (f r) s
+  ask = UniMonad (cont $ \k r s -> k r r s)
+  local f m = UniMonad (cont $ \k r s -> runCont (runUniMonad m) k (f r) s)
 
 instance forall r e s m. (Monad m) => MonadState s (UniMonad r e s m) where
-  get   = UniMonad $ \_ s -> return (Right s, s)
-  put s = UniMonad $ \_ _ -> return (Right (), s)
+  get    = UniMonad (cont $ \k r s -> k s r s)
+  put s' = UniMonad (cont $ \k r _ -> k () r s')
 
 instance forall r e s m. (Monad m) => MonadError e (UniMonad r e s m) where
-  throwError e = UniMonad $ \_ s -> return (Left e, s)
-  catchError m f = UniMonad $
-    \r s -> do 
-              (x', s') <- runUniMonad m r s
-              case x' of
-                Left e -> let m' = f e in
-                            (runUniMonad m') r s'
-                Right a -> return (Right a, s')
+  -- Throw away the continuation
+  throwError e = UniMonad (cont $ \_ _ s -> return (Left e, s))
+  catchError action handler =
+    UniMonad (cont $
+      \k r s -> do 
+                  (x', s') <- runCont (runUniMonad action) (\a _ s'' -> return (Right a, s'')) r s
+                  case x' of
+                    Left e -> runCont (runUniMonad (handler e)) k r s'
+                    Right a -> k a r s'
+    )
 
 instance (MonadWriter w m) => MonadWriter w (UniMonad r e s m) where
-  tell w = UniMonad $ \_ s -> (tell w) >> return (Right (), s)
-  listen m = UniMonad $ \r s -> do
-               ((x', s'), w) <- listen $ runUniMonad m r s
-               return ((, w) <$> x', s')
-  pass m = UniMonad $ \r s -> do
-             (x', s') <- runUniMonad m r s
-             case x' of
-               Left e -> return (Left e, s')
-               Right (a, f) -> do
-                 a' <- pass $ return (a, f)
-                 return (Right a', s')
+  tell w = UniMonad (cont $ \k r s -> (tell w) >> k () r s)
+  listen m = do
+    a <- UniMonad $ runUniMonad m
+    UniMonad $ cont \k r s -> do
+                                x <- listen $ return a
+                                k x r s
+  pass m = do
+    a <- UniMonad $ runUniMonad m
+    UniMonad $ cont \k r s -> do
+                                x <- pass $ return a
+                                k x r s
 
 {-# INLINE bindUniMonad #-}
-bindUniMonad :: Monad m => UniMonad r e s m a -> (a -> UniMonad r e s m b) -> UniMonad r e s m b
-bindUniMonad m f = UniMonad $
-  \r s -> do 
-            (x', s') <- runUniMonad m r s
-            case x' of
-              Left e -> return (Left e, s')
-              Right a -> let m' = f a in
-                           (runUniMonad m') r s'
+bindUniMonad :: UniMonad r e s m a -> (a -> UniMonad r e s m b) -> UniMonad r e s m b
+bindUniMonad m f = UniMonad $ runUniMonad m >>= (\a -> runUniMonad (f a))
+
+
+--------------------------------------------------------------------------------
+-- Types
+--------------------------------------------------------------------------------
 
 
 data Ctx c v = Ctx
