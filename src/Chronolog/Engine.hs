@@ -17,7 +17,7 @@
 {-# OPTIONS_GHC -Wno-unused-do-bind #-}
 
 module Chronolog.Engine
-  ( T,
+  ( EngineT,
     Config (..), runConfig,
     Env (..), mkEnv, runEnv, substEnv,
     Step (..),
@@ -108,7 +108,7 @@ instance (Pretty a, Pretty c, Pretty v) => Pretty (Config a c v) where
         "doLogging =" <+> pPrint cfg.doLogging
       ]
 
-type T a c v m =
+type EngineT a c v m =
   (ReaderT (Ctx a c v))
     ( (StateT (Env a c v))
         ( ListT
@@ -123,7 +123,7 @@ type T a c v m =
         )
     )
 
-liftT :: (Monad m) => Common.T m x -> T a c v m x
+liftT :: (Monad m) => Common.T m x -> EngineT a c v m x
 liftT = lift . lift . lift . lift . lift . lift
 
 cons :: Monad m => a -> ListT m a -> ListT m a
@@ -143,7 +143,7 @@ type T' a c v m =
         )
     )
 
-runT' :: (Monad m) => T' a c v m x -> T a c v m (x, Env a c v)
+runT' :: (Monad m) => T' a c v m x -> EngineT a c v m (x, Env a c v)
 runT' m = do
   ctx <- ask
   env <- get
@@ -365,7 +365,7 @@ runEnv cfg env0 = do
     Left (err, env) -> return $ Left (err, env)
     Right branches -> return $ Right branches
 
-start :: (Monad m, Ord a, Ord c, Ord v, Pretty a, Pretty c, Pretty v, Show a, Show c, Show v) => T a c v m ()
+start :: (Monad m, Ord a, Ord c, Ord v, Pretty a, Pretty c, Pretty v, Show a, Show c, Show v) => EngineT a c v m ()
 start = do
   -- initialize trace
   tell_traceGoals =<< gets activeGoals
@@ -374,7 +374,7 @@ start = do
   -- enter loop
   loop
 
-loop :: forall a c v m. (Monad m, Ord a, Ord c, Ord v, Pretty a, Pretty c, Pretty v, Show a, Show c, Show v) => T a c v m ()
+loop :: forall a c v m. (Monad m, Ord a, Ord c, Ord v, Pretty a, Pretty c, Pretty v, Show a, Show c, Show v) => EngineT a c v m ()
 loop = do
   ctx <- ask
 
@@ -430,7 +430,7 @@ loop = do
 
       loop
 
-tryRules :: (Monad m, Ord v, Ord c, Ord a, Pretty v, Pretty c, Pretty a, Show v, Show c, Show a) => Goal a c v -> T a c v m ()
+tryRules :: (Monad m, Ord v, Ord c, Ord a, Pretty v, Pretty c, Pretty a, Show v, Show c, Show a) => Goal a c v -> EngineT a c v m ()
 tryRules goal = do
   ctx <- ask
 
@@ -507,7 +507,7 @@ tryRules goal = do
         True -> fromBranches (branches <&> \(_, env) -> ((), env))
 
 -- | Returns a `Bool` indicating whether or not applying the rule was successful.
-tryRule :: forall m a c v. (Monad m, Ord v, Pretty v, Pretty c, Pretty a, Eq a, Eq c, Show a, Show c, Show v) => Goal a c v -> Rule a c v -> T a c v m Bool
+tryRule :: forall m a c v. (Monad m, Ord v, Pretty v, Pretty c, Pretty a, Eq a, Eq c, Show a, Show c, Show v) => Goal a c v -> Rule a c v -> EngineT a c v m Bool
 tryRule goal rule = do
   ctx <- ask
   tellMsgs
@@ -529,15 +529,13 @@ tryRule goal rule = do
           -- NOTE: it seems odd that this is required, since I _thought_ that in the implementation of unification it incrementally applies the substitution as it is computed (viz `Unification.setVarM`)
           Unification.normEnv
           return atom
-      )
-        & ( `runReaderT`
-              Unification.Ctx
+      ) & Unification.runUnificationT
+            Unification.emptyEnv
+            ( Unification.Ctx
                 { exprAliases = ctx.config.exprAliases,
                   doLogging = ctx.config.doLogging
                 }
-          )
-        & runExceptT
-        & (`runStateT` Unification.emptyEnv)
+            )
 
   let sigma_uni :: Subst c v
       sigma_uni = env_uni' ^. Unification.sigma
@@ -683,7 +681,7 @@ tryRule goal rule = do
 
           return True
 
-runFreshening :: (Monad m) => Freshening.M c v x -> T a c v m x
+runFreshening :: (Monad m) => Freshening.M c v x -> EngineT a c v m x
 runFreshening m = do
   env_freshening <- do
     env <- get
@@ -703,18 +701,18 @@ runFreshening m = do
   return x
 
 -- | Nondeterministically choose from a list.
-choose :: (Monad m) => [x] -> T a c v m x
+choose :: (Monad m) => [x] -> EngineT a c v m x
 choose = lift . lift . foldr cons mempty
 
 -- | Nondeterministically pursue all branches.
-fromBranches :: (Monad m) => [(x, Env a c v)] -> T a c v m x
+fromBranches :: (Monad m) => [(x, Env a c v)] -> EngineT a c v m x
 fromBranches branches = lift $ StateT $ const $ foldr cons mempty branches
 
 -- | Nondeterministically rejected branch.
-reject :: (Monad m) => T a c v m x
+reject :: (Monad m) => EngineT a c v m x
 reject = lift . lift $ mempty
 
-extractNextActiveGoal :: (Monad m) => T a c v m (Maybe (Goal a c v))
+extractNextActiveGoal :: (Monad m) => EngineT a c v m (Maybe (Goal a c v))
 extractNextActiveGoal =
   gets activeGoals >>= \case
     [] -> return Nothing
@@ -722,13 +720,13 @@ extractNextActiveGoal =
       modify \env -> env {activeGoals = activeGoals'}
       return $ Just goal
 
-tellMsgs :: (Monad m) => [Msg] -> T a c v m ()
+tellMsgs :: (Monad m) => [Msg] -> EngineT a c v m ()
 tellMsgs msgs = do 
   ctx <- ask
   when ctx.config.doLogging
     $ lift . lift . lift . lift . lift . lift . Writer.tell $ msgs
 
-tell_traceStep :: (Monad m) => Step a c v -> T a c v m ()
+tell_traceStep :: (Monad m) => Step a c v -> EngineT a c v m ()
 tell_traceStep step = do
   ctx <- ask
   when (ctx.config.doLogging)
@@ -747,7 +745,7 @@ tell_traceStep step = do
                 ]
           }
 
-tell_traceGoals :: (Monad m) => [Goal a c v] -> T a c v m ()
+tell_traceGoals :: (Monad m) => [Goal a c v] -> EngineT a c v m ()
 tell_traceGoals goals = do
   ctx <- ask
   when ctx.config.doLogging
