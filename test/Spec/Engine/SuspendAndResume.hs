@@ -35,7 +35,9 @@ tests =
                 mkGoal 1 $ A :~ "y",
                 mkGoal 2 $ "x" :~ B
               ],
-              useIndexing = True
+              useIndexing = True,
+              doLogging = True
+
           }
         EngineSuccess,
       mkTest_Engine
@@ -51,7 +53,8 @@ tests =
             exprAliases = [],
             shouldSuspend = const False,
             goals = [mkGoal 0 $ A :~ B],
-            useIndexing = True
+            useIndexing = True,
+            doLogging = True
 
           }
         (EngineError OutOfGas),
@@ -88,7 +91,8 @@ unrolling_tests =
           exprAliases = [],
           shouldSuspend = const False,
           goals = [],
-          useIndexing = True
+          useIndexing = True,
+          doLogging = True
         }
 
     rules1 :: [Rule A C V]

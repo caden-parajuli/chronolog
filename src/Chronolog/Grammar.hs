@@ -48,7 +48,7 @@ import qualified Data.Set as Set
 import Data.String (IsString (fromString))
 import GHC.Generics (Generic)
 import Text.PrettyPrint (braces, brackets, comma, hang, hcat, hsep, nest, parens, punctuate, text, vcat, (<+>), Doc)
-import Text.PrettyPrint.HughesPJClass (Pretty (pPrint))
+import Text.PrettyPrint.HughesPJClass (Pretty (pPrint), render)
 import Utility
 
 --------------------------------------------------------------------------------
@@ -62,6 +62,7 @@ data Rule a c v = Rule
     conc :: Atom a c v,
     ruleOpts :: {-# UNPACK #-} !(RuleOpts a c v)
   }
+  deriving Show
 
 instance (Pretty a, Pretty c, Pretty v) => Pretty (Rule a c v) where
   pPrint rule =
@@ -127,6 +128,9 @@ data RuleOpts a c v = RuleOpts
     suspendRuleOpt :: {-# UNPACK #-} !(Maybe (Goal a c v -> Bool)),
     existentialVarsRuleOpt :: Set v
   }
+
+instance (Pretty v) => Show (RuleOpts a c v) where
+  show ruleOpts = render $ pPrint ruleOpts
 
 instance (Pretty v) => Pretty (RuleOpts a c v) where
   pPrint ruleOpts =
@@ -373,9 +377,9 @@ unExprAlias (ExprAlias f) = f
 applyExprAlias :: [ExprAlias c v] -> Expr c v -> Maybe (Expr c v)
 applyExprAlias aliases e = foldr (\(ExprAlias f) -> (f e <|>)) Nothing aliases
 
-normAliasesInGoal :: (MonadWriter [Msg] m) => [ExprAlias c v] -> Goal a c v -> m (Goal a c v)
+normAliasesInGoal :: [ExprAlias c v] -> Goal a c v -> Goal a c v
 normAliasesInGoal exprAliases goal =
-  return goal { atom = normAliasesInAtom exprAliases goal.atom }
+  goal { atom = normAliasesInAtom exprAliases goal.atom }
 
 normAliasesInAtom :: [ExprAlias c v] -> Atom a c v -> Atom a c v
 normAliasesInAtom exprAliases (Atom a es) = Atom a $ map (normAliasesInExpr exprAliases) es

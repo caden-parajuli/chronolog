@@ -3,7 +3,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# OPTIONS_GHC -Wno-missing-export-lists #-}
 
-module Chronolog.Indexing (Trie (..), emptyTrie, buildIndex, filterPathIndexing) where
+module Chronolog.Indexing (Trie (..), emptyTrie, buildIndex, filterPathIndexing, genGraphviz) where
 
 import Chronolog.Grammar as G
 import Control.Monad.State (MonadState (put), evalState, get)
@@ -234,8 +234,8 @@ filterPathIndexing aliases goal trie =
                         [0 .. (Vector.length fastGoal.exprs - 1)]
 
 -- | Generates a tree representation to be rendered by Graphviz dot
-_genGraphviz :: (Show a, Show c) => Trie a c v -> String
-_genGraphviz trie =
+genGraphviz :: (Show a, Show c) => Trie a c v -> String
+genGraphviz trie =
   let getNext = do
         i <- get
         put (succ i)

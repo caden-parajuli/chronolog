@@ -78,7 +78,8 @@ mkParsingTest testName parsedRules parsedGoal expected =
                                          exprAliases = [],
                                          goals = [mkGoal 0 goal'],
                                          shouldSuspend = const False,
-                                         useIndexing = True
+                                         useIndexing = True,
+                                         doLogging = True
                                        }
                                     )
                                     expected

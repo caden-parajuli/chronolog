@@ -29,7 +29,8 @@ tests =
               exprAliases = [],
               shouldSuspend = const False,
               goals = [mkGoal 0 $ Atom "P" ["x"]],
-              useIndexing = True
+              useIndexing = True,
+              doLogging = True
             }
         )
         (EngineSuccessWithSolutionsCount 2)

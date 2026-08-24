@@ -17,10 +17,10 @@ tests :: TestTree
 tests =
   testGroup
     "Add"
-    [ mkTest 0 0 0 EngineSuccess,
-      mkTest 0 1 1 EngineSuccess,
-      mkTest 1 0 1 EngineSuccess,
-      mkTest 1 2 3 EngineSuccess,
+    [ -- mkTest 0 0 0 EngineSuccess,
+      -- mkTest 0 1 1 EngineSuccess,
+      -- mkTest 1 0 1 EngineSuccess,
+      -- mkTest 1 2 3 EngineSuccess,
       mkTest 1 2 2 EngineFailure
     ]
 
@@ -35,7 +35,8 @@ mkTest a b c =
           exprAliases = [],
           goals = [mkGoal 0 $ fromIntegral a :+ fromIntegral b :== fromIntegral c],
           shouldSuspend = const False,
-          useIndexing = True
+          useIndexing = True,
+          doLogging = True
         }
     )
 

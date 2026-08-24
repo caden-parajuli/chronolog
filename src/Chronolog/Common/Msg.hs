@@ -2,7 +2,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# OPTIONS_GHC -Wno-missing-export-lists #-}
 
-module Chronolog.Common.Msg where
+module Chronolog.Common.Msg (Msg(..), Level(Level), mk) where
 
 import Text.PrettyPrint (Doc, brackets, nest, vcat, (<+>))
 import Text.PrettyPrint.HughesPJClass (Pretty (pPrint))
@@ -27,9 +27,6 @@ mk l title =
       title,
       contents = mempty
     }
-
-addContent :: Doc -> Msg -> Msg
-addContent content msg = msg {contents = msg.contents <> [content]}
 
 newtype Level = Level Int
   deriving (Show, Eq, Ord)

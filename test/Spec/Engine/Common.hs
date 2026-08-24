@@ -107,6 +107,10 @@ mkTest_Engine testName cfg result_expected = testCase (render (text testName <+>
       & runExceptT
       & runWriterT
 
+  putStrLn "\n\n"
+  print (fmap pPrint err_or_envs)
+  putStrLn "\n\n"
+
   mb_err :: Maybe Doc <- case err_or_envs of
     Left err -> case result_expected of
       EngineErrorCatastrophic Nothing -> return Nothing

@@ -59,7 +59,8 @@ tests_v1 =
                     Goal {atom = Valid (Functor (VarExpr _)) _} -> True
                     Goal {atom = Valid (VarExpr _ :<: VarExpr _) _} -> True
                     _ -> False,
-                  useIndexing = True
+                  useIndexing = True,
+                  doLogging = True
                 }
             )
             (EngineSuccessWithSubst $ Subst $ Map.fromList [(pf, pf')])

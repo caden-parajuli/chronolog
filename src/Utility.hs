@@ -7,7 +7,6 @@
 module Utility where
 
 import Control.Category ((>>>))
-import Control.Lens (FunctorWithIndex (imap))
 import Control.Monad (foldM, (>=>))
 import Data.Function ((&))
 import Data.Kind (Type)
@@ -43,11 +42,6 @@ infixl 4 =<<$>
 (<&>>=) = for
 
 infixr 4 <&>>=
-
-(<&@>) :: (FunctorWithIndex i f) => (i -> a -> b) -> f a -> f b
-(<&@>) = imap
-
-infixl 1 <&@>
 
 filterMap :: (a -> Maybe b) -> [a] -> [b]
 filterMap f = foldMap (f >>> maybe mempty pure)

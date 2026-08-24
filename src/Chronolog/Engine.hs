@@ -1,4 +1,3 @@
-{-# LANGUAGE Strict #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE NamedFieldPuns #-}
@@ -6,6 +5,10 @@
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE UndecidableInstances #-}
 {-# OPTIONS_GHC -Wno-missing-export-lists #-}
 {-# OPTIONS_GHC -Wno-partial-fields #-}
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
@@ -18,12 +21,12 @@
 
 module Chronolog.Engine
   ( EngineT,
-    Config (..), runConfig,
+    Config (..), defaultConfig, runConfig,
     Env (..), mkEnv, runEnv, substEnv,
     Step (..),
     Strategy (BreadthFirstStrategy, DepthFirstStrategy), defaultDepthFirstStrategyOpts,
     Trace (..),
-    Error,
+    Error (..),
     Gas (..), decrementGas,
     DepthFirstStrategyOpts (..), mkCtx, runFreshening, listTtoList,
   )
@@ -37,7 +40,6 @@ import Chronolog.Grammar
 import Chronolog.Indexing (filterPathIndexing)
 import qualified Chronolog.Indexing as Indexing
 import qualified Chronolog.Unification as Unification
-import Control.Lens ((^.))
 import Control.Monad (foldM, unless, when)
 import Control.Monad.Except (ExceptT, runExceptT, throwError)
 import Control.Monad.Reader (ReaderT, ask, runReaderT)
@@ -108,49 +110,43 @@ instance (Pretty a, Pretty c, Pretty v) => Pretty (Config a c v) where
         "doLogging =" <+> pPrint cfg.doLogging
       ]
 
+
+-- Each action runs on *all* branches
 type EngineT a c v m =
+  -- Global context (but read per-branch)
   (ReaderT (Ctx a c v))
-    ( (StateT (Env a c v))
+    -- Environment for each branch
+    ( StateT (Env a c v)
+        -- Branches
         ( ListT
-            ( (StateT Gas) -- gas is shared among branches, rather than each branch getting it's own copy like Env
-                ( (ExceptT (Error, Env a c v))
-                    ( (WriterT (Trace a c v))
-                        ( Common.T m
-                        )
+            -- Global Gas
+            ( StateT Gas -- gas is shared among branches, rather than each branch getting its own copy like Env
+                -- Exception handler
+                ( ExceptT (Error, Env a c v)
+                    -- Trace writer
+                    ( WriterT (Trace a c v)
+                        (Common.T m)
                     )
                 )
             )
         )
     )
 
-liftT :: (Monad m) => Common.T m x -> EngineT a c v m x
-liftT = lift . lift . lift . lift . lift . lift
+liftListT :: Monad m => ListT (StateT Gas (ExceptT (Error, Env a c v) (WriterT (Trace a c v) (Common.T m)))) x -> EngineT a c v m x
+liftListT = lift . lift
+
+-- Lifts State Gas, Except, and Writer Trace actions
+liftSEW :: Monad m => StateT Gas (ExceptT (Error, Env a c v) (WriterT (Trace a c v) (Common.T m))) x -> EngineT a c v m x
+liftSEW = liftListT . lift
+
+liftCommonT :: (Monad m) => Common.T m x -> EngineT a c v m x
+liftCommonT = liftSEW . lift . lift . lift
 
 cons :: Monad m => a -> ListT m a -> ListT m a
 cons a l = return a <> l
 
 listTtoList :: Monad m => ListT m a -> m [a]
 listTtoList = (PipesP.toListM . enumerate)
-
-type T' a c v m =
-  (ReaderT (Ctx a c v))
-    ( (StateT (Env a c v))
-        ( (ExceptT (Error, Env a c v))
-            ( (WriterT (Trace a c v))
-                ( Common.T m
-                )
-            )
-        )
-    )
-
-runT' :: (Monad m) => T' a c v m x -> EngineT a c v m (x, Env a c v)
-runT' m = do
-  ctx <- ask
-  env <- get
-  m
-    & (`runReaderT` ctx)
-    & (`runStateT` env)
-    & lift . lift . lift . lift
 
 data Error
   = OutOfGas
@@ -380,13 +376,13 @@ loop = do
 
   -- update gas
   do
-    g <- lift . lift $ get
+    g <- liftListT get
     -- check gas
     when (g & isDepletedGas) do
       env <- get
       throwError (OutOfGas, env)
     -- update gas
-    lift . lift $ modify decrementGas
+    liftListT $ modify decrementGas
 
   -- process next active goal
   extractNextActiveGoal >>= \case
@@ -413,7 +409,7 @@ loop = do
               }
           ]
 
-      goal' <- liftT $ normAliasesInGoal ctx.config.exprAliases goal
+      goal' <- liftCommonT . return $ normAliasesInGoal ctx.config.exprAliases goal
       if ctx.config.shouldSuspend goal'
         then do
           tellMsgs
@@ -455,7 +451,7 @@ tryRules goal = do
               & tryRule goal
               & (`runReaderT` ctx)
               & (`runStateT` env)
-              & lift . lift
+              & liftListT
               & fmap \case
                 (False, _) -> Nothing
                 (True, env') -> Just (rule, env')
@@ -523,7 +519,7 @@ tryRule goal rule = do
   env_beforeUnification <- get
 
   (err_or_goal', env_uni') <-
-    lift . lift . lift . lift . lift . lift $
+    liftCommonT $
       ( do
           atom <- Unification.unifyAtom goal.atom rule.conc
           -- NOTE: it seems odd that this is required, since I _thought_ that in the implementation of unification it incrementally applies the substitution as it is computed (viz `Unification.setVarM`)
@@ -538,7 +534,7 @@ tryRule goal rule = do
             )
 
   let sigma_uni :: Subst c v
-      sigma_uni = env_uni' ^. Unification.sigma
+      sigma_uni = Unification.sigma env_uni'
   case err_or_goal' of
     Left err -> do
       tellMsgs
@@ -700,17 +696,13 @@ runFreshening m = do
       }
   return x
 
--- | Nondeterministically choose from a list.
-choose :: (Monad m) => [x] -> EngineT a c v m x
-choose = lift . lift . foldr cons mempty
-
 -- | Nondeterministically pursue all branches.
 fromBranches :: (Monad m) => [(x, Env a c v)] -> EngineT a c v m x
 fromBranches branches = lift $ StateT $ const $ foldr cons mempty branches
 
 -- | Nondeterministically rejected branch.
 reject :: (Monad m) => EngineT a c v m x
-reject = lift . lift $ mempty
+reject = liftListT $ mempty
 
 extractNextActiveGoal :: (Monad m) => EngineT a c v m (Maybe (Goal a c v))
 extractNextActiveGoal =
@@ -724,13 +716,13 @@ tellMsgs :: (Monad m) => [Msg] -> EngineT a c v m ()
 tellMsgs msgs = do 
   ctx <- ask
   when ctx.config.doLogging
-    $ lift . lift . lift . lift . lift . lift . Writer.tell $ msgs
+    $ liftCommonT . Writer.tell $ msgs
 
 tell_traceStep :: (Monad m) => Step a c v -> EngineT a c v m ()
 tell_traceStep step = do
   ctx <- ask
   when (ctx.config.doLogging)
-    $ lift . lift . lift . Writer.tell $
+    $ liftSEW . Writer.tell $
         Trace
           { traceSteps = Map.singleton step.goal.goalIndex [step],
             traceGoals =
@@ -749,8 +741,11 @@ tell_traceGoals :: (Monad m) => [Goal a c v] -> EngineT a c v m ()
 tell_traceGoals goals = do
   ctx <- ask
   when ctx.config.doLogging
-    $ lift . lift . lift . Writer.tell $
+    $ liftSEW . Writer.tell $
          Trace
            { traceSteps = Map.empty,
              traceGoals = Map.fromList [(g.goalIndex, g) | g <- goals]
            }
+
+
+

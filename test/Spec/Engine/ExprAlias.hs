@@ -67,7 +67,8 @@ ex1_tests =
                 _ -> Nothing
             ],
           strategy = DepthFirstStrategy defaultDepthFirstStrategyOpts,
-          useIndexing = True
+          useIndexing = True,
+          doLogging = True
         }
 
 pattern A :: Expr C V

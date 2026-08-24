@@ -3,8 +3,6 @@
 module Spec.Unification (tests) where
 
 import Control.Monad.Except (runExceptT)
-import Control.Monad.Reader (ReaderT (runReaderT))
-import Control.Monad.State (StateT (runStateT))
 import Control.Monad.Writer (WriterT (runWriterT))
 import Chronolog.Grammar
 import Chronolog.Unification (unifyAtom)
@@ -39,9 +37,10 @@ mkTest :: TestName -> Atom A C V -> Atom A C V -> Atom A C V -> TestTree
 mkTest testName atom1 atom2 atomExpected = testCase testName do
   result <-
     atom1 `unifyAtom` atom2
-      & (`runReaderT` Unification.Ctx {exprAliases = []})
-      & runExceptT
-      & (`runStateT` (Unification.Env {_sigma = emptySubst}))
+      & (Unification.runUnificationT
+          (Unification.Env {sigma = emptySubst})
+          (Unification.Ctx {exprAliases = [], doLogging = True})
+        )
       & runExceptT
       & runWriterT
   case result of

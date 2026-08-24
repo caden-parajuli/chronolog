@@ -124,7 +124,8 @@ tests =
                     exprAliases = [],
                     shouldSuspend = const False,
                     strategy = DepthFirstStrategy defaultDepthFirstStrategyOpts,
-                    useIndexing = True
+                    useIndexing = True,
+                    doLogging = True
                   }
                 AugmentDerivation.Config
                   { isDerivation = \a -> Just ("?" <> coerce a)

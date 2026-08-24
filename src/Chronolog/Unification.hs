@@ -13,9 +13,12 @@
 {-# HLINT ignore "Use newtype instead of data" #-}
 {-# HLINT ignore "Redundant $" #-}
 
-module Chronolog.Unification (Ctx (..), runUnificationT, emptyEnv, normEnv, unifyAtom, sigma) where
+module Chronolog.Unification (
+  unifyAtom,
+  Ctx (..), runUnificationT,
+  Env (..), emptyEnv, normEnv
+) where
 
-import Control.Lens (makeLenses, (%=), (.=), (^.))
 import Control.Monad (when, zipWithM, ap, liftM)
 import Control.Monad.Cont (Cont, cont, runCont)
 import Control.Monad.Except (MonadError, throwError, catchError)
@@ -31,20 +34,27 @@ import qualified Data.Set as Set
 import Text.PrettyPrint (hang, (<+>))
 import Text.PrettyPrint.HughesPJClass (Pretty (pPrint))
 import Utility (bullets, fixpointEqM, (=<<$>))
-import Debug.Trace (trace, traceShow)
 
 --------------------------------------------------------------------------------
 -- Unification monad
 --------------------------------------------------------------------------------
 
--- Holds a global Ctx, throws Error exceptions, uses Env as state, and produces Common.T m actions
+-- Reads a global Ctx, throws Error exceptions, uses Env as state, and produces Common.T m actions
 type UnificationT a c v m = UniMonad (Ctx c v) (Error a c v) (Env c v) (Common.T m)
 
 {-# INLINE runUnificationT #-}
 runUnificationT :: Monad m => Env c v -> Ctx c v -> UnificationT a c v m b -> Common.T m (Either (Error a c v) b, Env c v)
 runUnificationT env ctx m = runCont (runUniMonad m) (\b _ s -> return (Right b, s)) ctx env
 
+{-# INLINE tellMsg #-}
+tellMsg :: Monad m => Msg.Msg -> UnificationT a c v m ()
+tellMsg msg = do
+  ctx <- ask
+  when (ctx.doLogging) $ tell [msg]
+
 -- CPS version of: ReaderT r (ExceptT e (StateT s m))
+-- Using CPS gives a ~50% performance improvement
+-- See wiki.haskell.org/Performance/Monads#Use_Continuation_Passing_Style for more details
 newtype UniMonad r e s m a = UniMonad {
   runUniMonad :: forall res. Cont (r -> s -> m (Either e res, s)) a
 }
@@ -60,16 +70,18 @@ instance (Monad m) => Monad (UniMonad r e s m) where
   return = pure
   (>>=)  = bindUniMonad
 
+-- We use the the variable k for the continuation
+
 instance forall r e s m. (Monad m) => MonadReader r (UniMonad r e s m) where
-  ask = UniMonad (cont $ \k r s -> k r r s)
-  local f m = UniMonad (cont $ \k r s -> runCont (runUniMonad m) k (f r) s)
+  ask       = UniMonad (cont $ \k r -> k r r)
+  local f m = UniMonad (cont $ \k r -> runCont (runUniMonad m) k (f r))
 
 instance forall r e s m. (Monad m) => MonadState s (UniMonad r e s m) where
   get    = UniMonad (cont $ \k r s -> k s r s)
   put s' = UniMonad (cont $ \k r _ -> k () r s')
 
 instance forall r e s m. (Monad m) => MonadError e (UniMonad r e s m) where
-  -- Throw away the continuation
+  -- Throw away the continuation and return error
   throwError e = UniMonad (cont $ \_ _ s -> return (Left e, s))
   catchError action handler =
     UniMonad (cont $
@@ -83,12 +95,12 @@ instance forall r e s m. (Monad m) => MonadError e (UniMonad r e s m) where
 instance (MonadWriter w m) => MonadWriter w (UniMonad r e s m) where
   tell w = UniMonad (cont $ \k r s -> (tell w) >> k () r s)
   listen m = do
-    a <- UniMonad $ runUniMonad m
+    a <- m
     UniMonad $ cont \k r s -> do
                                 x <- listen $ return a
                                 k x r s
   pass m = do
-    a <- UniMonad $ runUniMonad m
+    a <- m
     UniMonad $ cont \k r s -> do
                                 x <- pass $ return a
                                 k x r s
@@ -109,20 +121,20 @@ data Ctx c v = Ctx
   }
 
 data Env c v = Env
-  { _sigma :: Subst c v
+  { sigma :: Subst c v
   }
   deriving (Show, Eq)
 
 instance (Pretty c, Pretty v) => Pretty (Env c v) where
   pPrint Env {..} =
     hang "Unification.Env" 2 . bullets $
-      [ "sigma =" <+> pPrint _sigma
+      [ "sigma =" <+> pPrint sigma
       ]
 
 emptyEnv :: Env c v
 emptyEnv =
   Env
-    { _sigma = emptySubst
+    { sigma = emptySubst
     }
 
 data Error a c v
@@ -135,9 +147,6 @@ instance (Pretty a, Pretty c, Pretty v) => Pretty (Error a c v) where
   pPrint (AtomsError a1 a2) = pPrint a1 <+> "!~" <+> pPrint a2
   pPrint (ExprsError e1 e2) = pPrint e1 <+> "!~" <+> pPrint e2
   pPrint (OccursError x e) = pPrint x <+> "was unified with" <+> pPrint e <+> "recursively"
-
-makeLenses ''Ctx
-makeLenses ''Env
 
 --------------------------------------------------------------------------------
 -- Functions
@@ -157,16 +166,14 @@ unifyExpr :: (Monad m, Ord v, Eq c, Pretty v, Pretty c) => Expr c v -> Expr c v 
 unifyExpr e1 e2 = do
   e1' <- normExpr e1
   e2' <- normExpr e2
-  ctx <- ask
-  when (ctx.doLogging)
-    $ tell
-       [ (Msg.mk 5 "unifyExpr")
-           { Msg.contents =
-               [ "e1 =" <+> pPrint e1',
-                 "e2 =" <+> pPrint e2'
-               ]
-           }
-       ]
+  tellMsg $
+    (Msg.mk 5 "unifyExpr")
+      { Msg.contents =
+          [ "e1 =" <+> pPrint e1',
+            "e2 =" <+> pPrint e2'
+          ]
+      }
+       
   unifyExpr' e1' e2'
 
 unifyExpr' :: (Monad m, Ord v, Eq c, Pretty v, Pretty c) => Expr c v -> Expr c v -> UnificationT a c v m (Expr c v)
@@ -196,12 +203,12 @@ unifyExpr' e1@(ConExpr (Con _ _)) e2@(ConExpr (Con _ _)) = do
     _ -> throwError $ ExprsError e1' e2'
 
 normExpr :: (Monad m, Ord v) => Expr c v -> UnificationT a c v m (Expr c v)
-normExpr = liftA2 substExpr (gets (^. sigma)) . return
+normExpr = liftA2 substExpr (gets sigma) . return
 
 normEnv :: (Monad m, Eq c, Ord v) => UnificationT a c v m ()
 normEnv = do
   sigma' <-
-    gets (^. sigma)
+    gets sigma
       >>= fixpointEqM
         ( \s ->
             s
@@ -214,22 +221,20 @@ normEnv = do
                 )
               & fmap Subst
         )
-  sigma .= sigma'
+  put $ Env sigma'
 
 setVarM :: (Monad m, Ord v, Eq c, Pretty v, Pretty c) => Var v -> Expr c v -> UnificationT a c v m ()
 setVarM x e = do
-  ctx <- ask
-  when (ctx.doLogging)
-    $ tell [Msg.mk 4 $ "setVarM" <+> pPrint x <+> pPrint e]
+  tellMsg $ Msg.mk 4 $ "setVarM" <+> pPrint x <+> pPrint e
   -- if 'x' occurs in 'e', then is a cyclic substitution, which is inconsistent
   when (Set.member x (varsExpr e)) do throwError $ ExprsError (VarExpr x) e
   e' <-
-    gets (substVar . (^. sigma)) <*> return x >>= \case
+    gets (substVar . sigma) <*> return x >>= \case
       Nothing -> return e
       -- if 'x' is already substituted, then must unify the old substitute 'e'
       -- with the new substitute 'e''
       Just e' -> do
-        when (ctx.doLogging)
-          $ tell [Msg.mk 4 $ "[setVarM]" <+> pPrint x <+> "was already substituted, so must check: " <+> pPrint e <+> "~" <+> pPrint e']
+        tellMsg $ Msg.mk 4 $ "[setVarM]" <+> pPrint x <+> "was already substituted, so must check: " <+> pPrint e <+> "~" <+> pPrint e'
         unifyExpr e e'
-  sigma %= setVar x e'
+  sigma' <- gets sigma
+  put $ Env (setVar x e' sigma')

@@ -90,7 +90,8 @@ tests_Norm_v1 =
               Goal {atom = Valid (VarExpr _ :⇓ VarExpr _) _} -> True
               _ -> False,
             initialGas = FiniteGas 50,
-            useIndexing = True
+            useIndexing = True,
+            doLogging = True
           }
 
     rules_v1 :: [Rule A C V]
