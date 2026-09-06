@@ -16,7 +16,7 @@ module Chronolog.Grammar
   ( Rule (..), mkRule, mkRule', printRuleProlog, unRuleName,
     RuleOpts (..), defaultRuleOpts,
     RuleName (..),
-    Goal (..), mkGoal, mkHypGoal,
+    Goal (..), mkGoal, mkHypGoal, unGoalHyp,
     GoalOpts (..), defaultGoalOpts,
     GoalIndex,
     Hyp (..),
@@ -25,7 +25,7 @@ module Chronolog.Grammar
     Var (..),
     Con (..), pattern (:%),
     Subst (..), substRule, substGoal, substExpr, substVar, setVar, emptySubst, unSubst, composeSubst_unsafe,
-    ExprAlias (..), normAliasesInGoal, normAliasesInAtom, normHeadAliasesInExpr,
+    ExprAlias (..), normAliasesInGoal, normAliasesInAtom, normHeadAliasesInExpr, applyExprAlias
   )
 where
 
@@ -35,7 +35,6 @@ import Control.Applicative ((<|>))
 import Control.Monad (unless, when)
 import Control.Monad.Error.Class (MonadError (throwError))
 import Control.Monad.Writer (MonadWriter, tell)
-import Control.Newtype.Generics (Newtype, over)
 import Data.Char (toUpper, toLower)
 import Data.Function ((&))
 import Data.Functor ((<&>))
@@ -109,7 +108,7 @@ printRuleProlog (Rule name hyps conc ruleOpts) =
       ":-",
       -- todo: existential vars
       let textHyps = map printHypProlog hyps
-          clause = spacedCommas $ 
+          clause = spacedCommas $
                      if ruleOpts.cutRuleOpt
                      then "!" : textHyps
                      else textHyps
@@ -166,8 +165,11 @@ instance (Pretty a, Pretty c, Pretty v) => Pretty (Hyp a c v) where
         pPrint g.goalOpts
       ]
 
+unGoalHyp :: Hyp a c v -> Goal a c v
+unGoalHyp (GoalHyp goal) = goal
+
 printHypProlog :: Hyp String String String -> Doc
-printHypProlog (GoalHyp (Goal atom goalOpts _)) = 
+printHypProlog (GoalHyp (Goal atom goalOpts _)) =
   if goalOpts.requiredGoalOpt
   then "$" <> printAtomProlog atom
   else printAtomProlog atom
@@ -268,9 +270,9 @@ instance (IsString v) => IsString (Expr c v) where fromString x = VarExpr (fromS
 printExprProlog :: Expr String String -> Doc
 printExprProlog (VarExpr (Var v Nothing)) = text (applyFirst toUpper v)
 printExprProlog (VarExpr (Var v (Just i))) = text (applyFirst toLower v) <> text (show i)
-printExprProlog (ConExpr (Con name [])) = 
+printExprProlog (ConExpr (Con name [])) =
   text $ applyFirst toLower name
-printExprProlog (ConExpr (Con name args)) = 
+printExprProlog (ConExpr (Con name args)) =
   hcat [
     text $ applyFirst toLower name,
     parens . spacedCommas . (map printExprProlog) $ args
@@ -336,8 +338,6 @@ mkConExpr c es = c :% es
 -- | Substitution of meta-variables
 newtype Subst c v = Subst (Map (Var v) (Expr c v))
   deriving (Show, Eq, Generic)
-
-instance Newtype (Subst c v)
 
 instance (Pretty c, Pretty v) => Pretty (Subst c v) where
   pPrint (Subst m) =
@@ -452,11 +452,15 @@ occursInExpr x e = x `Set.member` varsExpr e
 emptySubst :: Subst c v
 emptySubst = Subst Map.empty
 
+-- setVar doesn't apply the new mapping to all the other mappings, and thus
+-- requires normEnv to be called after. If this decision is reversed, then this becomes a
+-- hotspot where 30% of execution time is spent and 50% of allocations are made.
+-- {-# SCC setVar #-}
+{-# INLINE setVar #-}
 setVar :: (Ord v) => Var v -> Expr c v -> Subst c v -> Subst c v
-setVar x e =
-  over Subst $
-    fmap (substExpr (Subst (Map.singleton x e)))
-      . Map.insert x e
+setVar x e (Subst m) =
+  Subst (Map.insert x e m)
+  -- Subst (Map.insert x e $ mapVar x e <$> m)
 
 substRule :: (Ord v) => Subst c v -> Rule a c v -> Rule a c v
 substRule sigma rule =
@@ -483,6 +487,17 @@ substExpr (Subst m) (VarExpr x) = case m Map.!? x of
 substExpr sigma (ConExpr (Con c es)) =
   ConExpr (Con c (es <&> substExpr sigma))
 
+-- like substExpr for singleton substitutions
+{-# SCC mapVar #-}
+mapVar :: (Ord v) => Var v -> Expr c v -> Expr c v -> Expr c v
+mapVar v e e'@(VarExpr x) = 
+  if v == x
+  then e
+  else e'
+mapVar v e (ConExpr (Con c es)) =
+  ConExpr (Con c (mapVar v e <$> es))
+
+
 substVar :: (Ord v) => Subst c v -> Var v -> Maybe (Expr c v)
 substVar (Subst m) x = m Map.!? x
 
@@ -503,5 +518,8 @@ composeSubst sigma@(Subst m) sigma'@(Subst m') = do
   return $ Subst $ m `Map.union` (m' <&> substExpr sigma)
 
 -- | Similar to `composeSubst`, but doesn't check for overlaps.
+-- todo: This is a hotspot. 25% of execution time is spent here,
+-- and 20% of allocations are performed here
+-- there may be a more efficient way to do this
 composeSubst_unsafe :: (Ord v) => Subst c v -> Subst c v -> Subst c v
 composeSubst_unsafe sigma'@(Subst m') sigma@(Subst m) = Subst $ (m' <&> substExpr sigma) `Map.union` (m <&> substExpr sigma')

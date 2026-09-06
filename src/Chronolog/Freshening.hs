@@ -8,7 +8,7 @@ import Chronolog.Grammar
 import Data.Function ((&))
 import Data.Set (Set)
 import qualified Data.Set as Set
-import Utility
+import Data.Traversable (for)
 
 data Env c v = Env
   { sigma :: Subst c v,
@@ -22,7 +22,7 @@ type M c v = State (Env c v)
 freshenRule :: (Ord v) => Rule a c v -> M c v (Rule a c v)
 freshenRule rule = do
   modify \env -> env {existentialVars = rule.ruleOpts.existentialVarsRuleOpt <> env.existentialVars}
-  hyps' <- rule.hyps <&>>= freshenHyp
+  hyps' <- rule.hyps `for` freshenHyp
   conc' <- rule.conc & freshenAtom
   return
     rule
@@ -49,18 +49,18 @@ freshenGoal goal = do
   return goal' {atom = atom'}
 
 freshenAtom :: (Ord v) => Atom a c v -> M c v (Atom a c v)
-freshenAtom (Atom a es) = Atom a <$> (es <&>>= freshenExpr)
+freshenAtom (Atom a es) = Atom a <$> (es `for` freshenExpr)
 
 freshenExpr :: (Ord v) => Expr c v -> M c v (Expr c v)
 freshenExpr (VarExpr x) = freshenVar x
-freshenExpr (ConExpr (Con c es)) = ConExpr . Con c <$> (es <&>>= freshenExpr)
+freshenExpr (ConExpr (Con c es)) = ConExpr . Con c <$> (es `for` freshenExpr)
 
 freshenVar :: (Ord v) => Var v -> M c v (Expr c v)
 freshenVar x = do
   env <- get
   if x.labelVar `Set.member` env.existentialVars
     then return $ VarExpr x
-    else case x & substVar env.sigma of
+    else case substVar env.sigma x of
       Just x' -> return x'
       Nothing -> do
         let freshCounter_vars' = env.freshCounter_vars + 1

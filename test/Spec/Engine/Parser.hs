@@ -73,13 +73,10 @@ mkParsingTest testName parsedRules parsedGoal expected =
                                     testName
                                     (Engine.Config
                                        { initialGas = FiniteGas 50,
-                                         strategy = DepthFirstStrategy defaultDepthFirstStrategyOpts,
                                          rules = map (\(DocRule rule _) -> rule) rules',
                                          exprAliases = [],
                                          goals = [mkGoal 0 goal'],
-                                         shouldSuspend = const False,
-                                         useIndexing = True,
-                                         doLogging = True
+                                         shouldSuspend = const False
                                        }
                                     )
                                     expected

@@ -122,10 +122,7 @@ tests =
                       ],
                     goals = [mkGoal 0 $ T (S (S (S (S Z))))],
                     exprAliases = [],
-                    shouldSuspend = const False,
-                    strategy = DepthFirstStrategy defaultDepthFirstStrategyOpts,
-                    useIndexing = True,
-                    doLogging = True
+                    shouldSuspend = const False
                   }
                 AugmentDerivation.Config
                   { isDerivation = \a -> Just ("?" <> coerce a)

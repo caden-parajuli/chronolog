@@ -53,14 +53,11 @@ tests_v1 =
                 { goals = [mkGoal 0 $ Valid (s :<: t) (VarExpr pf)],
                   rules = rules_v1,
                   initialGas = FiniteGas 50,
-                  strategy = DepthFirstStrategy defaultDepthFirstStrategyOpts,
                   exprAliases = [],
                   shouldSuspend = \case
                     Goal {atom = Valid (Functor (VarExpr _)) _} -> True
                     Goal {atom = Valid (VarExpr _ :<: VarExpr _) _} -> True
-                    _ -> False,
-                  useIndexing = True,
-                  doLogging = True
+                    _ -> False
                 }
             )
             (EngineSuccessWithSubst $ Subst $ Map.fromList [(pf, pf')])

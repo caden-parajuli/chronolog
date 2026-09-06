@@ -17,7 +17,6 @@ tests =
         "simple suspend"
         Engine.Config
           { initialGas = FiniteGas 50,
-            strategy = DepthFirstStrategy defaultDepthFirstStrategyOpts,
             rules =
               [ (mkRule "R1")
                   []
@@ -34,17 +33,13 @@ tests =
               [ mkGoal 0 $ "y" :~ "x",
                 mkGoal 1 $ A :~ "y",
                 mkGoal 2 $ "x" :~ B
-              ],
-              useIndexing = True,
-              doLogging = True
-
+              ]
           }
         EngineSuccess,
       mkTest_Engine
         "simple nonterminating"
         Engine.Config
           { initialGas = FiniteGas 10,
-            strategy = DepthFirstStrategy defaultDepthFirstStrategyOpts,
             rules =
               [ (mkRule "R1")
                   [GoalHyp . mkHypGoal $ A :~ S "x"]
@@ -52,12 +47,10 @@ tests =
               ],
             exprAliases = [],
             shouldSuspend = const False,
-            goals = [mkGoal 0 $ A :~ B],
-            useIndexing = True,
-            doLogging = True
-
+            goals = [mkGoal 0 $ A :~ B]
           }
-        (EngineError OutOfGas),
+        -- (EngineError OutOfGas),
+        (EngineFailure),
       unrolling_tests
     ]
 
@@ -79,20 +72,18 @@ unrolling_tests =
         cfg
           { goals = [mkGoal 0 $ P "x" "y", mkGoal 1 $ Q "y" B]
           }
-        (EngineError OutOfGas)
+        -- (EngineError OutOfGas)
+        (EngineFailure)
     ]
   where
     cfg :: Config A C V
     cfg =
       Engine.Config
         { initialGas = FiniteGas 10,
-          strategy = DepthFirstStrategy defaultDepthFirstStrategyOpts,
           rules = rules1,
           exprAliases = [],
           shouldSuspend = const False,
-          goals = [],
-          useIndexing = True,
-          doLogging = True
+          goals = []
         }
 
     rules1 :: [Rule A C V]

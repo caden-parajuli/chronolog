@@ -40,8 +40,7 @@ tests =
                     [ hang "rules =" 2 (pPrint cfg_engine_post.rules),
                       hang "goals =" 2 (pPrint cfg_engine_post.goals)
                     ],
-              mkTest_Engine (groupName <> "_post") cfg_engine_post EngineSuccess,
-              mkTest_Engine_visualization (groupName <> "_post") (groupName <> "_post" <> ".html") cfg_engine_post
+              mkTest_Engine (groupName <> "_post") cfg_engine_post EngineSuccess
             ]
           where
             cfg_engine_post = augmentGoalTrace cfg_augmentGoalTrace cfg_engine_pre
@@ -56,10 +55,7 @@ tests =
                 goals =
                   [mkGoal 0 A],
                 exprAliases = [],
-                shouldSuspend = const False,
-                strategy = DepthFirstStrategy defaultDepthFirstStrategyOpts,
-                useIndexing = True,
-                doLogging = True
+                shouldSuspend = const False
               }
             AugmentGoalTrace.Config {},
           mkTestGroup
@@ -73,10 +69,7 @@ tests =
                 goals =
                   [mkHypGoal A, mkHypGoal A],
                 exprAliases = [],
-                shouldSuspend = const False,
-                strategy = DepthFirstStrategy defaultDepthFirstStrategyOpts,
-                useIndexing = True,
-                doLogging = True
+                shouldSuspend = const False
               }
             AugmentGoalTrace.Config {}
         ]

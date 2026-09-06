@@ -1,16 +1,16 @@
 cabal-version: 2.2
 
--- This file has been generated from package.yaml by hpack version 0.39.1.
+-- This file has been generated from package.yaml by hpack version 0.39.6.
 --
 -- see: https://github.com/sol/hpack
 
 name:           chronolog
-version:        0.1.1.0
+version:        0.2.0.0
 description:    Please see the README on GitHub at <https://github.com/rybla/chronolog#readme>
-homepage:       https://github.com/rybla/chronolog#readme
-bug-reports:    https://github.com/rybla/chronolog/issues
+homepage:       https://github.com/caden-parajuli/chronolog#readme
+bug-reports:    https://github.com/caden-parajuli/chronolog/issues
 author:         Henry Blanchette
-maintainer:     henry@rybl.net
+maintainer:     caden.parajuli@bc.edu
 copyright:      MIT
 license:        BSD-3-Clause
 license-file:   LICENSE
@@ -21,7 +21,7 @@ extra-source-files:
 
 source-repository head
   type: git
-  location: https://github.com/rybla/chronolog
+  location: https://github.com/caden-parajuli/chronolog
 
 library
   exposed-modules:
@@ -30,7 +30,6 @@ library
       Chronolog.Engine
       Chronolog.Freshening
       Chronolog.Grammar
-      Chronolog.Html
       Chronolog.Indexing
       Chronolog.Lexer
       Chronolog.Library.AugmentDerivation
@@ -62,12 +61,8 @@ library
     , lens
     , listsafe
     , mtl
-    , newtype-generics
     , parallel
-    , pipes
     , pretty
-    , singletons
-    , singletons-th
     , text
     , transformers
     , vector
@@ -101,13 +96,9 @@ executable chronolog-exe
     , lens
     , listsafe
     , mtl
-    , newtype-generics
     , parallel
     , parseargs
-    , pipes
     , pretty
-    , singletons
-    , singletons-th
     , text
     , transformers
     , vector
@@ -122,7 +113,6 @@ test-suite chronolog-test
       Spec.Engine.Add
       Spec.Engine.ApplicativeFunctorSubtyping
       Spec.Engine.Common
-      Spec.Engine.CutRule
       Spec.Engine.ExistentialVariables
       Spec.Engine.ExprAlias
       Spec.Engine.Indexing
@@ -162,12 +152,8 @@ test-suite chronolog-test
     , lens
     , listsafe
     , mtl
-    , newtype-generics
     , parallel
-    , pipes
     , pretty
-    , singletons
-    , singletons-th
     , tasty
     , tasty-golden
     , tasty-hunit

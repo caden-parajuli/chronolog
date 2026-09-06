@@ -17,7 +17,6 @@ tests =
         "v1"
         ( Engine.Config
             { initialGas = FiniteGas 50,
-              strategy = DepthFirstStrategy defaultDepthFirstStrategyOpts,
               rules =
                 [ (mkRule "P 1")
                     []
@@ -28,9 +27,7 @@ tests =
                 ],
               exprAliases = [],
               shouldSuspend = const False,
-              goals = [mkGoal 0 $ Atom "P" ["x"]],
-              useIndexing = True,
-              doLogging = True
+              goals = [mkGoal 0 $ Atom "P" ["x"]]
             }
         )
         (EngineSuccessWithSolutionsCount 2)

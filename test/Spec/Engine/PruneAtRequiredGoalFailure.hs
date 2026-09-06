@@ -43,11 +43,7 @@ tests =
               [ mkGoal 0 $ Atom P []
               ],
             shouldSuspend = const False,
-            exprAliases = [],
-            strategy = Engine.DepthFirstStrategy Engine.defaultDepthFirstStrategyOpts,
-            useIndexing = True,
-            doLogging = True
-
+            exprAliases = []
           }
         Common.EngineFailure,
       mkTest_Engine @A @C @V
@@ -65,11 +61,8 @@ tests =
               [ mkGoal 0 $ Atom P []
               ],
             shouldSuspend = const False,
-            exprAliases = [],
-            strategy = Engine.DepthFirstStrategy Engine.defaultDepthFirstStrategyOpts,
-            useIndexing = True,
-            doLogging = True
-
+            exprAliases = []
           }
-        (Common.EngineError Engine.OutOfGas)
+        -- (Common.EngineError Engine.OutOfGas)
+        (Common.EngineFailure)
     ]

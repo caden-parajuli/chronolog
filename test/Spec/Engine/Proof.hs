@@ -83,15 +83,12 @@ tests_Norm_v1 =
         testName
         Engine.Config
           { goals = [mkGoal 0 $ Valid (in_ :⇓ "?out") "?{in ⇓ out}"],
-            strategy = DepthFirstStrategy defaultDepthFirstStrategyOpts,
             rules = rules_v1,
             exprAliases = [],
             shouldSuspend = \case
               Goal {atom = Valid (VarExpr _ :⇓ VarExpr _) _} -> True
               _ -> False,
-            initialGas = FiniteGas 50,
-            useIndexing = True,
-            doLogging = True
+            initialGas = FiniteGas 50
           }
 
     rules_v1 :: [Rule A C V]

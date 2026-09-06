@@ -1,263 +1,137 @@
-{-# LANGUAGE DataKinds #-}
-{-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE NamedFieldPuns #-}
-{-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE RecordWildCards #-}
-{-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE TypeFamilies #-}
-{-# LANGUAGE RankNTypes #-}
-{-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE MultiParamTypeClasses #-}
-{-# LANGUAGE UndecidableInstances #-}
-{-# OPTIONS_GHC -Wno-missing-export-lists #-}
-{-# OPTIONS_GHC -Wno-partial-fields #-}
-{-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
-{-# HLINT ignore "Use ||" #-}
-{-# HLINT ignore "Redundant $" #-}
-{-# HLINT ignore "Use newtype instead of data" #-}
-{-# HLINT ignore "Evaluate" #-}
-{-# HLINT ignore "Use if" #-}
-{-# OPTIONS_GHC -Wno-unused-do-bind #-}
-
 module Chronolog.Engine
-  ( EngineT,
-    Config (..), defaultConfig, runConfig,
-    Env (..), mkEnv, runEnv, substEnv,
-    Step (..),
-    Strategy (BreadthFirstStrategy, DepthFirstStrategy), defaultDepthFirstStrategyOpts,
-    Trace (..),
-    Error (..),
+  ( Config (..), defaultConfig, runConfig,
+    Node (..), mkNode, runNode, substNode,
     Gas (..), decrementGas,
-    DepthFirstStrategyOpts (..), mkCtx, runFreshening, listTtoList,
+    EngineState (..),
+    liftFreshening,
   )
 where
 
-import qualified Chronolog.Common as Common
-import Chronolog.Common.Msg (Msg)
-import qualified Chronolog.Common.Msg as Msg
 import qualified Chronolog.Freshening as Freshening
 import Chronolog.Grammar
 import Chronolog.Indexing (filterPathIndexing)
 import qualified Chronolog.Indexing as Indexing
 import qualified Chronolog.Unification as Unification
-import Control.Monad (foldM, unless, when)
-import Control.Monad.Except (ExceptT, runExceptT, throwError)
-import Control.Monad.Reader (ReaderT, ask, runReaderT)
-import Control.Monad.State (StateT (..), evalStateT, execStateT, get, gets, modify, runState, runStateT)
-import Control.Monad.Trans.Class (MonadTrans (lift))
-import Control.Monad.Writer (WriterT)
-import qualified Control.Monad.Writer as Writer
+import Control.Monad.State (State, put, get, modify, runState, execState)
 import Data.Function ((&))
-import Data.Functor ((<&>))
-import qualified Data.List.Safe as List
-import Data.Map (Map)
-import qualified Data.Map as Map
-import Data.Maybe (fromMaybe)
+import Data.Maybe (fromMaybe, mapMaybe, listToMaybe)
+import qualified Data.List as List
 import qualified Data.Set as Set
-import Pipes (ListT, enumerate)
-import qualified Pipes.Prelude as PipesP
-import Text.PrettyPrint.HughesPJClass (Doc, Pretty (pPrint), hang, hcat, text, (<+>))
+import Text.PrettyPrint.HughesPJClass (Pretty (pPrint), hang, text, (<+>))
 import Utility
 import Prelude hiding (init)
+import Data.Either (partitionEithers)
+
+{- We model the engine state as consisting of a set of "nodes" each of which
+   constists principally of a substitution and a set of goals. To begin execution,
+   each query is turned into a node, and the main engine loop is executed.
+   
+   The engine executes by selecting one of its nodes `b_0`, and mapping that node
+   to a new set of nodes `b_1 ... b_n`, which replace `b_0` in the engine state.
+   This new set of nodes can be empty (for solved or failed goals), a single node,
+   or multiple different nodes. This process continues until there are no remaining
+   nodes.
+   
+   More concretely:
+   1. The engine pops a node off of its node list
+   2. It selects the first active goal from that node (if there is none, the node is marked solved).
+   3. It finds all rules that unify with that goal.
+   4. For each such rule, a new node is created where the selected goal is replaced by the body of the rule.
+   5. The node's substitution is the old node's, composed with the unifier from step 3.
+   6. These nodes are pushed back into the engine state, in place of the old node.
+   7. Repeat from step 1, until there are no more unsolved nodes.
+-}
 
 
 --------------------------------------------------------------------------------
 -- types
 --------------------------------------------------------------------------------
 
--- TODO maybe use a ConfigBuilder here so that goals get assigned indices appropriately
-
--- | Engine configuration
---
--- The `shouldSuspend` predicate specifies when to suspend a goal `Atom`. For
--- example, you might want to suspend a goal that would trivially unify with
--- many rule heads, such as something like `IsTrue a` (where `a` might be
--- constrained in other goals).
 data Config a c v = Config
-  { initialGas :: {-# UNPACK #-} !Gas,
-    rules :: [Rule a c v],
-    goals :: [Goal a c v],
-    shouldSuspend :: Goal a c v -> Bool,
-    exprAliases :: [ExprAlias c v],
-    strategy :: {-# UNPACK #-} !Strategy,
-    useIndexing :: !Bool,
-    doLogging :: !Bool
+  { rules :: [Rule a c v]
+  , goals :: [Goal a c v]
+  , shouldSuspend :: Goal a c v -> Bool
+  , exprAliases :: [ExprAlias c v]
+  , initialGas :: !Gas
+  -- , strategy :: Strategy
+  -- , doLogging :: !Bool
   }
 
 defaultConfig :: Config a c v
 defaultConfig =
   Config
-    { initialGas = InfiniteGas,
-      rules = [],
-      goals = [],
-      shouldSuspend = const False,
-      exprAliases = [],
-      strategy = DepthFirstStrategy defaultDepthFirstStrategyOpts,
-      useIndexing = True,
-      doLogging = False
+    { rules = []
+    , goals = []
+    , shouldSuspend = const False
+    , exprAliases = []
+    , initialGas = InfiniteGas
     }
 
-instance (Pretty a, Pretty c, Pretty v) => Pretty (Config a c v) where
-  pPrint cfg =
-    hang "engine config" 4 . bullets $
-      [ "initialGas =" <+> pPrint cfg.initialGas,
-        "rules =" <+> pPrint cfg.rules,
-        "goals =" <+> pPrint cfg.goals,
-        "shouldSuspend =" <+> text "<function>",
-        "exprAliases =" <+> text "<function>",
-        "strategy =" <+> pPrint cfg.strategy,
-        "useIndexing =" <+> pPrint cfg.useIndexing,
-        "doLogging =" <+> pPrint cfg.doLogging
+-- Per-node environment
+data Node a c v = Node
+  { activeGoals :: [Goal a c v]
+  , suspendedGoals :: [Goal a c v]
+  , failedGoals :: [Goal a c v]
+  , sigma :: Subst c v
+  , freshCounter_vars :: !Int
+  , freshCounter_goals :: !Int
+  }
+  deriving Show
+
+instance (Pretty a, Pretty c, Pretty v) => Pretty (Node a c v) where
+  pPrint node =
+    hang (text "engine node:") 2 . bullets $
+      [ text "activeGoals =" <+> pPrint node.activeGoals,
+        text "suspendedGoals =" <+> pPrint node.suspendedGoals,
+        text "failedGoals =" <+> pPrint node.failedGoals,
+        text "sigma =" <+> pPrint node.sigma
       ]
 
-
--- Each action runs on *all* branches
-type EngineT a c v m =
-  -- Global context (but read per-branch)
-  (ReaderT (Ctx a c v))
-    -- Environment for each branch
-    ( StateT (Env a c v)
-        -- Branches
-        ( ListT
-            -- Global Gas
-            ( StateT Gas -- gas is shared among branches, rather than each branch getting its own copy like Env
-                -- Exception handler
-                ( ExceptT (Error, Env a c v)
-                    -- Trace writer
-                    ( WriterT (Trace a c v)
-                        (Common.T m)
-                    )
-                )
-            )
-        )
-    )
-
-liftListT :: Monad m => ListT (StateT Gas (ExceptT (Error, Env a c v) (WriterT (Trace a c v) (Common.T m)))) x -> EngineT a c v m x
-liftListT = lift . lift
-
--- Lifts State Gas, Except, and Writer Trace actions
-liftSEW :: Monad m => StateT Gas (ExceptT (Error, Env a c v) (WriterT (Trace a c v) (Common.T m))) x -> EngineT a c v m x
-liftSEW = liftListT . lift
-
-liftCommonT :: (Monad m) => Common.T m x -> EngineT a c v m x
-liftCommonT = liftSEW . lift . lift . lift
-
-cons :: Monad m => a -> ListT m a -> ListT m a
-cons a l = return a <> l
-
-listTtoList :: Monad m => ListT m a -> m [a]
-listTtoList = (PipesP.toListM . enumerate)
-
-data Error
-  = OutOfGas
-  deriving (Eq, Show)
-
-data Trace a c v = Trace
-  { traceGoals :: Map GoalIndex (Goal a c v),
-    traceSteps :: Map GoalIndex [Step a c v]
-  }
-
-instance Semigroup (Trace a c v) where
-  t1 <> t2 =
-    Trace
-      { -- t1 takes precedence
-        traceGoals = Map.unionWith const t1.traceGoals t2.traceGoals,
-        traceSteps = Map.unionWith (<>) t1.traceSteps t2.traceSteps
-      }
-
-instance Monoid (Trace a c v) where
-  mempty =
-    Trace
-      { traceGoals = Map.empty,
-        traceSteps = Map.empty
-      }
-
--- | Engine context
-data Ctx a c v = Ctx
-  { config :: Config a c v
-  }
-
-instance (Pretty a, Pretty c, Pretty v) => Pretty (Ctx a c v) where
-  pPrint ctx =
-    hang "engine context:" 2 . bullets $
-      [ hang "rules =" 2 . bullets $
-          ctx.config.rules <&> pPrint
-      ]
-
--- | Engine environment
-data Env a c v = Env
-  { freshCounter_vars :: !Int,
-    freshCounter_goals :: !Int,
-    rules :: [Rule a c v],
-    pathIndex :: Indexing.Trie a c v,
-    activeGoals :: [Goal a c v],
-    suspendedGoals :: [Goal a c v],
-    failedGoals :: [Goal a c v],
-    sigma :: Subst c v,
-    stepsRev :: [Step a c v]
-  }
-
-instance (Pretty a, Pretty c, Pretty v) => Pretty (Env a c v) where
-  pPrint env =
-    hang "engine environment:" 2 . bullets $
-      [ "rules =" <+> "...",
-        "activeGoals =" <+> pPrint env.activeGoals,
-        "suspendedGoals =" <+> pPrint env.suspendedGoals,
-        "failedGoals =" <+> pPrint env.failedGoals,
-        hang "steps =" 2 . bullets $
-          env.stepsRev & reverse <&> pPrint,
-        "sigma =" <+> pPrint env.sigma
-      ]
-
-substEnv :: (Ord v) => Subst c v -> Env a c v -> Env a c v
-substEnv sigma env =
-  env
-    { rules = substRule sigma <$> env.rules,
-      activeGoals = substGoal sigma <$> env.activeGoals,
-      suspendedGoals = substGoal sigma <$> env.suspendedGoals,
-      failedGoals = substGoal sigma <$> env.failedGoals,
-      sigma = composeSubst_unsafe sigma env.sigma
+mkNode :: Config a c v -> Node a c v
+mkNode cfg =
+  Node
+    { activeGoals = cfg.goals
+    , suspendedGoals = mempty
+    , failedGoals = mempty
+    , freshCounter_vars = 0
+    , freshCounter_goals = (cfg.goals & fmap (fromMaybe (-1) . goalIndex) & maximum) + 1
+    , sigma = emptySubst
     }
 
--- | The proof-search strategy.
-data Strategy
-  = -- |
-    -- A breadth-first strategy:
-    --   - subgoals are inserted at the end of the list of subgoals to solve
-    --     next, so they are to be solved after any pre-existing subgoals
-    BreadthFirstStrategy
-  | -- |
-    -- A depth-first strategy:
-    --   - subgoals are inserted at the beginning of the list of subgoals to
-    --     solve next, so they are to be solved before any pre-existing subgoals
-    DepthFirstStrategy {-# UNPACK #-} !DepthFirstStrategyOpts
-  deriving (Eq, Show)
 
-instance Pretty Strategy where
-  pPrint = text . show
-
-data DepthFirstStrategyOpts = DepthFirstStrategyOpts
-  { -- | Whether or not to consider failing branches. `agressive == True`
-    -- essentially implies that all goals are treated as required.
-    aggressiveDepthFirstStrategyOpt :: !Bool
-  }
-  deriving (Eq, Show)
-
-defaultDepthFirstStrategyOpts :: DepthFirstStrategyOpts
-defaultDepthFirstStrategyOpts =
-  DepthFirstStrategyOpts
-    { aggressiveDepthFirstStrategyOpt = False
+substNode :: (Ord v) => Subst c v -> Node a c v -> Node a c v
+substNode sigma' node =
+  node
+    { activeGoals = substGoal sigma' <$> node.activeGoals
+    , suspendedGoals = substGoal sigma' <$> node.suspendedGoals
+    , sigma = composeSubst_unsafe sigma' node.sigma
     }
 
-isAggressiveStrategy :: Strategy -> Bool
-isAggressiveStrategy (DepthFirstStrategy opts) = opts.aggressiveDepthFirstStrategyOpt
-isAggressiveStrategy _ = False
+-- Global engine state
+data EngineState a c v = EngineState
+  { nodes :: [Node a c v]
+  , solvedNodes :: [Node a c v]
+  , failedNodes :: [Node a c v]
+  , gas :: {-# UNPACK #-} !Gas
+  -- Read-only portion:
+  , rules :: [Rule a c v]
+  , pathIndex :: Indexing.Trie a c v
+  , exprAliases :: [ExprAlias c v]
+  , shouldSuspend :: Goal a c v -> Bool
+  }
 
-instance Pretty DepthFirstStrategyOpts where
-  pPrint = text . show
-
-instance Pretty Error where
-  pPrint OutOfGas = "out of gas"
+mkEngineState :: (Ord a, Ord c) => Config a c v -> Node a c v -> EngineState a c v
+mkEngineState cfg rootNode =
+  EngineState
+    { nodes = [rootNode]
+    , solvedNodes = []
+    , failedNodes = []
+    , gas = cfg.initialGas
+    , rules = cfg.rules
+    , pathIndex = Indexing.buildIndex cfg.exprAliases cfg.rules
+    , exprAliases = cfg.exprAliases
+    , shouldSuspend = cfg.shouldSuspend
+    }
 
 data Gas
   = FiniteGas !Int
@@ -266,419 +140,178 @@ data Gas
 
 instance Pretty Gas where
   pPrint (FiniteGas n) = pPrint n
-  pPrint InfiniteGas = "∞"
+  pPrint InfiniteGas = text "∞"
 
 isDepletedGas :: Gas -> Bool
 isDepletedGas (FiniteGas n) = n <= 0
 isDepletedGas InfiniteGas = False
+{-# INLINE isDepletedGas #-}
 
 decrementGas :: Gas -> Gas
 decrementGas (FiniteGas n) = FiniteGas (n - 1)
 decrementGas InfiniteGas = InfiniteGas
-
-data Step a c v
-  = ApplyRuleStep
-      { goal :: Goal a c v,
-        ruleName :: {-# UNPACK #-} !RuleName,
-        sigma :: Subst c v,
-        subgoals :: [Goal a c v]
-      }
-  | FailureStep
-      { goal :: Goal a c v,
-        reason :: Doc
-      }
-  | SuspendStep
-      { goal :: Goal a c v,
-        reason :: Doc
-      }
-  | ResumeStep
-      { goal :: Goal a c v,
-        reason :: Doc
-      }
-  | SolveStep
-      { goal :: Goal a c v,
-        sigma :: Subst c v,
-        reason :: Doc
-      }
-
-instance (Pretty a, Pretty c, Pretty v) => Pretty (Step a c v) where
-  pPrint (ApplyRuleStep {..}) = "apply" <+> hcat [pPrint ruleName, ":"] <+> pPrint goal <+> "<==" <+> pPrint subgoals <+> "with" <+> pPrint sigma
-  pPrint (FailureStep {..}) = "fail" <+> pPrint goal <+> "because" <+> reason
-  pPrint (SuspendStep {..}) = "suspend" <+> pPrint goal <+> "because" <+> reason
-  pPrint (ResumeStep {..}) = "resume" <+> pPrint goal <+> "because" <+> reason
-  pPrint (SolveStep {..}) = "solve" <+> pPrint goal <+> "via" <+> pPrint sigma <+> "because" <+> reason
+{-# INLINE decrementGas #-}
 
 --------------------------------------------------------------------------------
 -- functions
 --------------------------------------------------------------------------------
 
-mkCtx :: Config a c v -> Ctx a c v
-mkCtx cfg =
-  Ctx
-    { config = cfg
-    }
+runConfig :: (Ord a, Ord c, Ord v, Pretty a, Pretty c, Pretty v) => Config a c v -> [Node a c v]
+runConfig cfg = runNode cfg (mkNode cfg)
 
-mkEnv :: (Ord a, Ord c) => Config a c v -> Env a c v
-mkEnv cfg =
-  Env
-    { rules = cfg.rules,
-      pathIndex = if cfg.useIndexing then Indexing.buildIndex cfg.exprAliases cfg.rules else Indexing.emptyTrie,
-      activeGoals = cfg.goals,
-      suspendedGoals = mempty,
-      failedGoals = mempty,
-      freshCounter_vars = 0,
-      freshCounter_goals = (cfg.goals & fmap (fromMaybe (-1) . goalIndex) & maximum) + 1,
-      stepsRev = [],
-      sigma = emptySubst
-    }
+runNode :: (Ord a, Ord c, Ord v, Pretty a, Pretty c, Pretty v) => Config a c v -> Node a c v -> [Node a c v]
+runNode cfg rootNode = solvedNodes $ execState loop (mkEngineState cfg rootNode)
 
--- | To run the solver, you must use either `runConfig` or `runEnv`.
-runConfig ::
-  (Monad m, Ord a, Ord c, Ord v, Pretty a, Pretty c, Pretty v, Show a, Show c, Show v) =>
-  Config a c v ->
-  WriterT (Trace a c v) (Common.T m) (Either (Error, Env a c v) [Env a c v])
-runConfig cfg = do
-  lift $ when (cfg.doLogging) $ Writer.tell [Msg.mk 0 "Engine.run"]
-  let env0 = mkEnv cfg
-  runEnv cfg env0
-
--- | To run the solver, you must use either `runConfig` or `runEnv`.
-runEnv ::
-  (Monad m, Ord a, Ord c, Ord v, Pretty a, Pretty c, Pretty v, Show a, Show c, Show v) =>
-  Config a c v ->
-  Env a c v ->
-  WriterT (Trace a c v) (Common.T m) (Either (Error, Env a c v) [Env a c v])
-runEnv cfg env0 = do
-  err_or_branches :: Either (Error, Env a c v) [Env a c v] <-
-    start
-      & (`runReaderT` mkCtx cfg)
-      & (`execStateT` env0)
-      & listTtoList
-      & (`evalStateT` cfg.initialGas)
-      & runExceptT
-
-  case err_or_branches of
-    Left (err, env) -> return $ Left (err, env)
-    Right branches -> return $ Right branches
-
-start :: (Monad m, Ord a, Ord c, Ord v, Pretty a, Pretty c, Pretty v, Show a, Show c, Show v) => EngineT a c v m ()
-start = do
-  -- initialize trace
-  tell_traceGoals =<< gets activeGoals
-  tell_traceGoals =<< gets suspendedGoals
-  tell_traceGoals =<< gets failedGoals
-  -- enter loop
-  loop
-
-loop :: forall a c v m. (Monad m, Ord a, Ord c, Ord v, Pretty a, Pretty c, Pretty v, Show a, Show c, Show v) => EngineT a c v m ()
+-- Returns True if successful. Returns False if it runs out of gas.
+loop :: (Ord a, Ord c, Ord v, Pretty a, Pretty c, Pretty v) => State (EngineState a c v) Bool
 loop = do
-  ctx <- ask
+  mNode <- pop
+  case mNode of
+    Just node -> do
+      -- If we wanted BFS we could just do concatMapM instead of pop and prepend
+      newNodes <- tryFirstGoal node
+      prepend newNodes
 
-  -- update gas
-  do
-    g <- liftListT get
-    -- check gas
-    when (g & isDepletedGas) do
-      env <- get
-      throwError (OutOfGas, env)
-    -- update gas
-    liftListT $ modify decrementGas
+      state <- get
 
-  -- process next active goal
-  extractNextActiveGoal >>= \case
-    -- if there are no more active goals, then done and terminate this branch successfully
-    Nothing -> do
-      env <- get
-      tellMsgs
-        [ (Msg.mk 1 "--------------------------------")
-            { Msg.contents =
-                [ "status =" <+> "no more active goals",
-                  "env =" <+> pPrint env
-                ]
-            }
-        ]
-    Just goal -> do
-      do
-        env <- get
-        tellMsgs
-          [ (Msg.mk 1 "--------------------------------")
-              { Msg.contents =
-                  [ "status =" <+> "processing goal:" <+> pPrint goal,
-                    "env =" <+> pPrint env
-                  ]
-              }
-          ]
+      -- Loop if we have gas
+      if isDepletedGas state.gas
+      then return False
+      else do
+        put state{ gas = decrementGas state.gas }
+        loop
+    -- No nodes left. We are done.
+    Nothing -> return True
 
-      goal' <- liftCommonT . return $ normAliasesInGoal ctx.config.exprAliases goal
-      if ctx.config.shouldSuspend goal'
-        then do
-          tellMsgs
-            [ (Msg.mk 1 "suspending goal")
-                { Msg.contents =
-                    [ "goal (before normAliasInGoal) =" <+> pPrint goal,
-                      "goal (after normAliasInGoal)  =" <+> pPrint goal'
-                    ]
-                }
-            ]
-          -- TODO: what is the significance of putting the goal at the beginning or end of this list?
-          modify \env -> env {suspendedGoals = goal' : env.suspendedGoals}
-        else tryRules goal
+-- Tries all rules on the given Node, returning the new Nodes this produces.
+-- Each successful rule produces a new Node where the tried goal is replaced
+-- with the rule's hypotheses.
+tryFirstGoal :: (Ord a, Ord c, Ord v, Pretty c, Pretty v) => Node a c v -> State (EngineState a c v) [Node a c v]
+tryFirstGoal node =
+  -- Get first active goal, if any
+  case node.activeGoals of
+    [] -> do
+      -- No active goals. This node is solved.
+      state <- get
+      put state{ solvedNodes = node : state.solvedNodes }
+      return []
+    (goal : otherGoals) -> do
+      state <- get
+      -- Check global suspend predicate
+      if state.shouldSuspend $ normAliasesInGoal state.exprAliases goal
+      then return [node{ activeGoals = otherGoals, suspendedGoals = goal : node.suspendedGoals }]
+      else do
+        let applicableRules = getRules node goal state
+            -- Try unifying with the rules to obtain new nodes
+            newNodes =
+              flip mapMaybe applicableRules \(rule, node') ->
+                case tryRule state.exprAliases node'.sigma goal rule of
+                  Nothing -> Nothing
+                  Just (subst, hyps') ->
+                    Just $ fromMaybe (node' {
+                                        sigma = composeSubst_unsafe subst node'.sigma,
+                                        activeGoals = hyps' ++ (substGoal subst <$> otherGoals)
+                                     })
+                                     (tryRuleSuspend node rule)
+        -- If newNodes is empty, the goal failed
+        case newNodes of
+          [] -> do
+                  state' <- get
+                  put state'{ failedNodes = node{failedGoals = goal : node.failedGoals} : state'.failedNodes }
+                  return []
+          [_] -> return $ map processSuspended newNodes
+          _ -> return $ map processSuspended newNodes
 
-      loop
+-- Applies the substitution to suspended goals, and resumes any that were updated.
+processSuspended :: (Eq a, Eq c, Ord v) => Node a c v -> Node a c v
+processSuspended node =
+  let suspendedGoals_old = node.suspendedGoals
+      suspendedGoals_substed = substGoal node.sigma <$> suspendedGoals_old
+      (toResume, suspendedGoals_new) =
+        partitionEithers $
+          zipWith
+            (\suspendedGoal_old suspendedGoal_substed ->
+                -- todo: We should be able to return directly whether a substitution affected a goal
+                -- That should be more efficient since then we don't need to keep the old goals in
+                -- memory and check equality
+                if suspendedGoal_old == suspendedGoal_substed
+                then Right suspendedGoal_substed
+                else Left suspendedGoal_substed)
+            suspendedGoals_old
+            suspendedGoals_substed
+   in node{ activeGoals = toResume ++ node.activeGoals, suspendedGoals = suspendedGoals_new }
 
-tryRules :: (Monad m, Ord v, Ord c, Ord a, Pretty v, Pretty c, Pretty a, Show v, Show c, Show a) => Goal a c v -> EngineT a c v m ()
-tryRules goal = do
-  ctx <- ask
 
-  rules' <-
-    gets
-      (\env -> if ctx.config.useIndexing then filterPathIndexing ctx.config.exprAliases goal env.pathIndex else env.rules)
-      -- freshen each rule
-      >>= traverse (runFreshening . Freshening.freshenRule)
-      -- apply current substitution to each rule (to update any existential variables)
-      >>= traverse (\rule -> gets \env -> substRule env.sigma rule)
-      -- apply constrained ruleset option if present
-      <&> case goal.goalOpts.constrainedRulesetGoalOpt of
-        Nothing -> id
-        Just ruleNames -> List.filter \rule -> rule.name `Set.member` ruleNames
-
-  branches :: [(Rule a c v, Env a c v)] <- do
-    env <- get
-    rules'
-      & filterMapM
-        ( \rule ->
-            rule
-              & tryRule goal
-              & (`runReaderT` ctx)
-              & (`runStateT` env)
-              & liftListT
-              & fmap \case
-                (False, _) -> Nothing
-                (True, env') -> Just (rule, env')
-        )
-
-  if null branches
-    then do
-      let step =
-            FailureStep
-              { goal = goal,
-                reason = "no rules apply to this goal"
-              }
-      tell_traceStep step
-
-      do
-        env <- get
-        tellMsgs
-          [ (Msg.mk 1 $ "failed goal because:" <+> step.reason)
-              { Msg.contents =
-                  [ "goal =" <+> pPrint goal,
-                    "env =" <+> pPrint env
-                  ]
-              }
-          ]
-
-      modify \env -> env {failedGoals = env.failedGoals <> [goal]}
-
-      when
-        ( or
-            [ isAggressiveStrategy ctx.config.strategy,
-              goal.goalOpts.requiredGoalOpt
-            ]
-        )
-        do
-          env <- get
-          tellMsgs [(Msg.mk 1 "pruning branch since faild a required goal") {Msg.contents = ["goal =" <+> pPrint goal, "env =" <+> pPrint env]}]
-          env.suspendedGoals <&>>= \goal' ->
-            tell_traceStep FailureStep {goal = goal', reason = "failed other required goal:" <+> pPrint goal}
-          reject
-    else do
-      let cutBranches =
-            branches & filterMap \(rule, env) ->
-              if rule.ruleOpts.cutRuleOpt
-                then Just ((), env)
-                else Nothing
-      case null cutBranches of
-        -- if any cut rules were successful, then prune all branches that used non-cut rules
-        False -> fromBranches cutBranches
-        True -> fromBranches (branches <&> \(_, env) -> ((), env))
-
--- | Returns a `Bool` indicating whether or not applying the rule was successful.
-tryRule :: forall m a c v. (Monad m, Ord v, Pretty v, Pretty c, Pretty a, Eq a, Eq c, Show a, Show c, Show v) => Goal a c v -> Rule a c v -> EngineT a c v m Bool
-tryRule goal rule = do
-  ctx <- ask
-  tellMsgs
-    [ (Msg.mk 3 "attempting to unify goal with rule's conclusion")
-        { Msg.contents =
-            [ "rule =" <+> pPrint rule.name,
-              "goal =" <+> pPrint goal,
-              "conc =" <+> pPrint rule.conc
-            ]
-        }
-    ]
-
-  env_beforeUnification <- get
-
-  (err_or_goal', env_uni') <-
-    liftCommonT $
-      ( do
-          atom <- Unification.unifyAtom goal.atom rule.conc
-          -- NOTE: it seems odd that this is required, since I _thought_ that in the implementation of unification it incrementally applies the substitution as it is computed (viz `Unification.setVarM`)
-          Unification.normEnv
-          return atom
-      ) & Unification.runUnificationT
-            Unification.emptyEnv
-            ( Unification.Ctx
-                { exprAliases = ctx.config.exprAliases,
-                  doLogging = ctx.config.doLogging
-                }
-            )
-
-  let sigma_uni :: Subst c v
-      sigma_uni = Unification.sigma env_uni'
-  case err_or_goal' of
-    Left err -> do
-      tellMsgs
-        [ (Msg.mk 2 "failed to unify goal with rule's conclusion")
-            { Msg.contents =
-                [ "rule =" <+> pPrint rule.name,
-                  "err =" <+> pPrint err,
-                  "show err =" <+> text (show err),
-                  "sigma_uni =" <+> pPrint sigma_uni,
-                  "goal =" <+> pPrint goal
-                ]
-            }
-        ]
-      return False
-    Right goal' -> do
-      tellMsgs
-        [ (Msg.mk 1 "successfully unified goal with rule's conclusion")
-            { Msg.contents =
-                [ "rule =" <+> pPrint rule.name,
-                  "sigma_uni =" <+> pPrint sigma_uni,
-                  "goal =" <+> pPrint goal,
-                  "goal' =" <+> pPrint goal'
-                ]
-            }
-        ]
-
-      case rule.ruleOpts.suspendRuleOpt of
-        Just f | f goal -> do
-          -- reset env to before unification with rule's head
-          -- suspend this goal and constrain the set of rules that can apply to it to just this rule
-          modify \env ->
-            env_beforeUnification
-              { suspendedGoals =
-                  env.suspendedGoals
-                    <> [ goal
+-- Tries to suspend the first goal of the node based on the rule's suspend option
+-- Returns Nothing if the suspend predicate does not apply
+tryRuleSuspend :: Node a c v -> Rule a c v -> Maybe (Node a c v)
+tryRuleSuspend (Node [] _ _ _ _ _) _rule = Nothing
+tryRuleSuspend beforeUni@(Node (goal : otherGoals) _ _ _ _ _) rule =
+   case rule.ruleOpts.suspendRuleOpt of
+     Just f | f goal -> Just $
+       beforeUni{ activeGoals = otherGoals
+                , suspendedGoals =
+                    -- todo: wouldn't it be more efficient to put it at the start? Does that change anything?
+                    beforeUni.suspendedGoals
+                    ++ [ goal
                            { goalOpts =
                                goal.goalOpts
-                                 { constrainedRulesetGoalOpt = Just (Set.fromList [rule.name]),
-                                   requiredGoalOpt = True
+                                 { constrainedRulesetGoalOpt = Just (Set.fromList [rule.name])
+                                 , requiredGoalOpt = True
                                  }
                            }
                        ]
-              }
-          tellMsgs
-            [ (Msg.mk 1 "suspended goal for just this rule")
-                { Msg.contents =
-                    [ "rule =" <+> pPrint rule.name,
-                      "goal =" <+> pPrint goal
-                    ]
                 }
-            ]
-          return True
-        _ -> do
-          subgoals <-
-            fmap concat $
-              rule.hyps <&>>= \case
-                GoalHyp subgoal -> do
-                  let subgoal' = subgoal & substGoal sigma_uni
-                  return [subgoal']
+     _ -> Nothing
 
-          unless (null subgoals) do
-            tellMsgs
-              [ (Msg.mk 1 "new subgoals")
-                  { Msg.contents = subgoals <&> pPrint
-                  }
-              ]
+-- Get and freshen applicable (as determined by path indexing) rules
+getRules ::
+  (Ord a, Ord c, Ord v) =>
+  Node a c v -> Goal a c v -> EngineState a c v -> [(Rule a c v, Node a c v)]
+getRules node goal state =
+  map
+    (goSubst . flip runState node . liftFreshening . Freshening.freshenRule)
+    $ filterConstrainedRuleset goal $ filterPathIndexing state.exprAliases goal state.pathIndex
 
-          suspendedGoals_old <- gets suspendedGoals
+  where goSubst :: Ord v => (Rule a c v, Node a c v) -> (Rule a c v, Node a c v)
+        goSubst (rule, node') = (substRule node'.sigma rule, node')
 
-          do
-            env <- get
-            tellMsgs
-              [ (Msg.mk 1 "new sigma")
-                  { Msg.contents =
-                      [ "old sigma =" <+> pPrint env.sigma,
-                        "new sigma =" <+> pPrint (env.sigma & composeSubst_unsafe sigma_uni)
-                      ]
-                  }
-              ]
+        filterConstrainedRuleset :: Goal a c v -> [Rule a c v] -> [Rule a c v]
+        filterConstrainedRuleset goal' =
+          case goal'.goalOpts.constrainedRulesetGoalOpt of
+            Nothing -> id
+            Just ruleNames -> List.filter \rule -> rule.name `Set.member` ruleNames
 
-          modify \env ->
-            env
-              { suspendedGoals =
-                  substGoal sigma_uni
-                    <$> env.suspendedGoals,
-                activeGoals =
-                  substGoal sigma_uni
-                    <$> case ctx.config.strategy of
-                      -- for a breadth first strategy, process old goals before new goals
-                      BreadthFirstStrategy -> env.activeGoals <> subgoals
-                      -- for a depth first strategy, process new goals before old goals
-                      DepthFirstStrategy _opts -> subgoals <> env.activeGoals,
-                sigma =
-                  composeSubst_unsafe sigma_uni env.sigma
-              }
 
-          -- for each suspended goal that was refined by sigma_uni, make it active again
-          suspendedGoals_curr <- gets suspendedGoals
+tryRule ::
+  (Eq a, Ord v, Eq c, Pretty v, Pretty c) =>
+  [ExprAlias c v] -> Subst c v -> Goal a c v -> Rule a c v -> Maybe (Subst c v, [Goal a c v])
+tryRule aliases subst goal rule =
+  case unifyAtoms aliases subst goal.atom rule.conc of
+    Nothing -> Nothing
+    Just (_, subst') -> Just (subst', map (substGoal subst' . unGoalHyp) rule.hyps)
 
-          (activeGoals_resumed, suspendedGoals_new) <- do
-            zip suspendedGoals_old suspendedGoals_curr
-              & foldM
-                ( \(activeGoals_resumed, suspendedGoals_new) (suspendedGoal_old, suspendedGoal_curr) -> do
-                    case suspendedGoal_old == suspendedGoal_curr of
-                      -- if the suspended goal was NOT refined by the substitution, then leave it suspended
-                      True -> do
-                        return (activeGoals_resumed, suspendedGoal_curr : suspendedGoals_new)
-                      -- if the suspended goal was refined by the substitution, then resume it
-                      False -> do
-                        tell_traceStep
-                          ResumeStep
-                            { goal = suspendedGoal_curr,
-                              reason = "the suspended goal was refined by a new substitution:" <+> pPrint sigma_uni
-                            }
-                        tellMsgs
-                          [ (Msg.mk 2 "resume goal")
-                              { Msg.contents = [pPrint suspendedGoal_curr]
-                              }
-                          ]
-                        return (suspendedGoal_curr : activeGoals_resumed, suspendedGoals_new)
-                )
-                ([], [])
-          modify \env ->
-            env
-              { activeGoals = activeGoals_resumed <> env.activeGoals,
-                suspendedGoals = suspendedGoals_new
-              }
+-- Gets a node, if there are any. This is the "nondeterministic choice"
+-- although the implementation just takes the first node, resulting in
+-- depth-first search
+pop :: State (EngineState a c v) (Maybe (Node a c v))
+pop = do
+  state <- get
+  put state{ nodes = drop 1 state.nodes }
+  return (listToMaybe state.nodes)
 
-          -- record step
-          let step = ApplyRuleStep {goal, ruleName = rule.name, sigma = sigma_uni, subgoals}
-          modify \env -> env {stepsRev = step : env.stepsRev}
-          tell_traceStep step
+-- Prepend some active nodes to the engine state
+-- This (along with pop) enforces depth-first search.
+-- For breadth-first we could just append to the end of the list
+-- here (or better yet we concatMap over the whole list instead of pop/prepend)
+prepend :: [Node a c v] -> State (EngineState a c v) ()
+prepend nodes' = do
+  state <- get
+  put state{ nodes = nodes' ++ state.nodes }
+  return ()
 
-          tellMsgs
-            [ (Msg.mk 1 "successfully applied rule")
-                { Msg.contents =
-                    ["rule =" <+> pPrint rule.name]
-                }
-            ]
-
-          return True
-
-runFreshening :: (Monad m) => Freshening.M c v x -> EngineT a c v m x
-runFreshening m = do
+liftFreshening :: Freshening.M c v x -> State (Node a c v) x
+liftFreshening freshenState = do
   env_freshening <- do
     env <- get
     return
@@ -688,64 +321,41 @@ runFreshening m = do
           freshCounter_goals = env.freshCounter_goals,
           existentialVars = Set.empty
         }
-  let (x, env_freshening') = m `runState` env_freshening
-  modify \env ->
-    env
-      { freshCounter_vars = env_freshening'.freshCounter_vars,
-        freshCounter_goals = env_freshening'.freshCounter_goals
-      }
+  let (x, env_freshening') = runState freshenState env_freshening
+  modify \state ->
+    state { freshCounter_vars = env_freshening'.freshCounter_vars
+          , freshCounter_goals = env_freshening'.freshCounter_goals
+          }
   return x
 
--- | Nondeterministically pursue all branches.
-fromBranches :: (Monad m) => [(x, Env a c v)] -> EngineT a c v m x
-fromBranches branches = lift $ StateT $ const $ foldr cons mempty branches
+unifyAtoms :: (Eq a, Ord v, Eq c, Pretty v, Pretty c) => [ExprAlias c v] -> Subst c v -> Atom a c v -> Atom a c v -> Maybe (Atom a c v, Subst c v)
+unifyAtoms aliases subst atom1 atom2 =
+    case ran of
+      (Nothing, _) -> Nothing
+      (Just atom', Unification.Env subst') -> Just (atom', subst')
+  where ran = Unification.runUnificationT (Unification.Env subst) (Unification.Ctx aliases) do
+                atom' <- Unification.unifyAtom atom1 atom2
+                -- See setVar for why this is necessary
+                Unification.normEnv
+                return atom'
 
--- | Nondeterministically rejected branch.
-reject :: (Monad m) => EngineT a c v m x
-reject = liftListT $ mempty
-
-extractNextActiveGoal :: (Monad m) => EngineT a c v m (Maybe (Goal a c v))
-extractNextActiveGoal =
-  gets activeGoals >>= \case
-    [] -> return Nothing
-    goal : activeGoals' -> do
-      modify \env -> env {activeGoals = activeGoals'}
-      return $ Just goal
-
-tellMsgs :: (Monad m) => [Msg] -> EngineT a c v m ()
-tellMsgs msgs = do 
-  ctx <- ask
-  when ctx.config.doLogging
-    $ liftCommonT . Writer.tell $ msgs
-
-tell_traceStep :: (Monad m) => Step a c v -> EngineT a c v m ()
-tell_traceStep step = do
-  ctx <- ask
-  when (ctx.config.doLogging)
-    $ liftSEW . Writer.tell $
-        Trace
-          { traceSteps = Map.singleton step.goal.goalIndex [step],
-            traceGoals =
-              Map.fromList
-                [ (g.goalIndex, g)
-                  | g <- case step of
-                      ApplyRuleStep {..} -> subgoals
-                      FailureStep {} -> []
-                      SuspendStep {} -> []
-                      ResumeStep {} -> []
-                      SolveStep {} -> []
-                ]
-          }
-
-tell_traceGoals :: (Monad m) => [Goal a c v] -> EngineT a c v m ()
-tell_traceGoals goals = do
-  ctx <- ask
-  when ctx.config.doLogging
-    $ liftSEW . Writer.tell $
-         Trace
-           { traceSteps = Map.empty,
-             traceGoals = Map.fromList [(g.goalIndex, g) | g <- goals]
-           }
-
-
-
+-- todo: define normReduceEnv which not only norms a Subst,
+-- but also takes a Node and prunes all of the unnecessary mappings
+-- from the Subst that are unreachable from the Node.
+--
+-- e.g. if the Node only has variables `x` and `y` in its goals, and
+-- the Subst is:
+--
+-- { x |-> z, y |-> t1, z |-> t2, w |-> t3 }
+-- 
+-- then `w |-> t3` should be removed from the Subst.
+--
+-- Substitutions can get to over 1000 mappings in DCS, and this is
+-- a major bottleneck.
+--
+-- It should be sufficient to just do the regular normEnv, then only
+-- keep mappings from variables directly in the Node. This should work since
+-- normEnv ensures that no variables in the body of the mappings
+-- are mapped elsewhere in the substitution. So the only variables
+-- in the Subst that are reachable from the Node are the ones
+-- that are directly in the Node.

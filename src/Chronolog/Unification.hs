@@ -2,8 +2,6 @@
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE TemplateHaskell #-}
-{-# LANGUAGE TupleSections #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE UndecidableInstances #-}
@@ -16,7 +14,8 @@
 module Chronolog.Unification (
   unifyAtom,
   Ctx (..), runUnificationT,
-  Env (..), emptyEnv, normEnv
+  Env (..), emptyEnv, normEnv,
+  Error
 ) where
 
 import Control.Monad (when, zipWithM, ap, liftM)
@@ -24,89 +23,72 @@ import Control.Monad.Cont (Cont, cont, runCont)
 import Control.Monad.Except (MonadError, throwError, catchError)
 import Control.Monad.Reader (MonadReader, ask, local)
 import Control.Monad.State (MonadState, gets, get, put)
-import Control.Monad.Writer (MonadWriter, tell, listen, pass)
-import qualified Chronolog.Common as Common
-import qualified Chronolog.Common.Msg as Msg
-import Chronolog.Grammar
+import Chronolog.Grammar hiding (normHeadAliasesInExpr)
 import Data.Function ((&))
 import qualified Data.Map as Map
 import qualified Data.Set as Set
 import Text.PrettyPrint (hang, (<+>))
 import Text.PrettyPrint.HughesPJClass (Pretty (pPrint))
-import Utility (bullets, fixpointEqM, (=<<$>))
+import Utility (bullets, fixpointEqM)
 
 --------------------------------------------------------------------------------
 -- Unification monad
 --------------------------------------------------------------------------------
 
 -- Reads a global Ctx, throws Error exceptions, uses Env as state, and produces Common.T m actions
-type UnificationT a c v m = UniMonad (Ctx c v) (Error a c v) (Env c v) (Common.T m)
+type UnificationT c v = UniMonad (Ctx c v) (Env c v)
 
 {-# INLINE runUnificationT #-}
-runUnificationT :: Monad m => Env c v -> Ctx c v -> UnificationT a c v m b -> Common.T m (Either (Error a c v) b, Env c v)
-runUnificationT env ctx m = runCont (runUniMonad m) (\b _ s -> return (Right b, s)) ctx env
+runUnificationT :: Env c v -> Ctx c v -> UnificationT c v b -> (Maybe b, Env c v)
+runUnificationT env ctx m = runCont (runUniMonad m) (\b _ s -> (Just b, s)) ctx env
 
-{-# INLINE tellMsg #-}
-tellMsg :: Monad m => Msg.Msg -> UnificationT a c v m ()
-tellMsg msg = do
-  ctx <- ask
-  when (ctx.doLogging) $ tell [msg]
-
--- CPS version of: ReaderT r (ExceptT e (StateT s m))
+-- CPS version of: ReaderT r (ExceptT () (StateT s m))
 -- Using CPS gives a ~50% performance improvement
 -- See wiki.haskell.org/Performance/Monads#Use_Continuation_Passing_Style for more details
-newtype UniMonad r e s m a = UniMonad {
-  runUniMonad :: forall res. Cont (r -> s -> m (Either e res, s)) a
+newtype UniMonad r s a = UniMonad {
+  runUniMonad :: forall res. Cont (r -> s -> (Maybe res, s)) a
 }
 
-instance (Monad m) => Functor (UniMonad r e s m) where
+instance Functor (UniMonad r s) where
   fmap = liftM
 
-instance (Monad m) => Applicative (UniMonad r e s m) where
+instance Applicative (UniMonad r s) where
   pure x = UniMonad (return x)
+  {-# INLINE pure #-}
   (<*>)  = ap
 
-instance (Monad m) => Monad (UniMonad r e s m) where
+instance Monad (UniMonad r s) where
   return = pure
   (>>=)  = bindUniMonad
+  {-# INLINE (>>=) #-}
 
 -- We use the the variable k for the continuation
 
-instance forall r e s m. (Monad m) => MonadReader r (UniMonad r e s m) where
+instance forall r s. MonadReader r (UniMonad r s) where
   ask       = UniMonad (cont $ \k r -> k r r)
   local f m = UniMonad (cont $ \k r -> runCont (runUniMonad m) k (f r))
 
-instance forall r e s m. (Monad m) => MonadState s (UniMonad r e s m) where
+instance forall r s. MonadState s (UniMonad r s) where
   get    = UniMonad (cont $ \k r s -> k s r s)
   put s' = UniMonad (cont $ \k r _ -> k () r s')
 
-instance forall r e s m. (Monad m) => MonadError e (UniMonad r e s m) where
+instance forall r s. MonadError () (UniMonad r s) where
   -- Throw away the continuation and return error
-  throwError e = UniMonad (cont $ \_ _ s -> return (Left e, s))
+  throwError () = UniMonad (cont $ \_ _ s -> (Nothing, s))
   catchError action handler =
     UniMonad (cont $
       \k r s -> do 
-                  (x', s') <- runCont (runUniMonad action) (\a _ s'' -> return (Right a, s'')) r s
+                  let (x', s') = runCont (runUniMonad action) (\a _ s'' -> (Just a, s'')) r s
                   case x' of
-                    Left e -> runCont (runUniMonad (handler e)) k r s'
-                    Right a -> k a r s'
+                    Nothing -> runCont (runUniMonad (handler ())) k r s'
+                    Just a -> k a r s'
     )
 
-instance (MonadWriter w m) => MonadWriter w (UniMonad r e s m) where
-  tell w = UniMonad (cont $ \k r s -> (tell w) >> k () r s)
-  listen m = do
-    a <- m
-    UniMonad $ cont \k r s -> do
-                                x <- listen $ return a
-                                k x r s
-  pass m = do
-    a <- m
-    UniMonad $ cont \k r s -> do
-                                x <- pass $ return a
-                                k x r s
+throwNothing :: UniMonad r s x
+throwNothing = throwError ()
 
 {-# INLINE bindUniMonad #-}
-bindUniMonad :: UniMonad r e s m a -> (a -> UniMonad r e s m b) -> UniMonad r e s m b
+bindUniMonad :: UniMonad r s a -> (a -> UniMonad r s b) -> UniMonad r s b
 bindUniMonad m f = UniMonad $ runUniMonad m >>= (\a -> runUniMonad (f a))
 
 
@@ -115,14 +97,9 @@ bindUniMonad m f = UniMonad $ runUniMonad m >>= (\a -> runUniMonad (f a))
 --------------------------------------------------------------------------------
 
 
-data Ctx c v = Ctx
-  { exprAliases :: [ExprAlias c v],
-    doLogging :: !Bool
-  }
+newtype Ctx c v = Ctx { exprAliases :: [ExprAlias c v] }
 
-data Env c v = Env
-  { sigma :: Subst c v
-  }
+newtype Env c v = Env { sigma :: Subst c v }
   deriving (Show, Eq)
 
 instance (Pretty c, Pretty v) => Pretty (Env c v) where
@@ -152,31 +129,23 @@ instance (Pretty a, Pretty c, Pretty v) => Pretty (Error a c v) where
 -- Functions
 --------------------------------------------------------------------------------
 
-unifyAtom :: (Monad m, Eq a, Ord v, Eq c, Pretty v, Pretty c) => Atom a c v -> Atom a c v -> UnificationT a c v m (Atom a c v)
-unifyAtom a1@(Atom c1 es1) a2@(Atom c2 es2) = do
-  when (c1 /= c2) do throwError $ AtomsError a1 a2
-  when ((es1 & length) /= (es2 & length)) do throwError $ AtomsError a1 a2
+unifyAtom :: (Eq a, Ord v, Eq c, Pretty v, Pretty c) => Atom a c v -> Atom a c v -> UnificationT c v (Atom a c v)
+unifyAtom (Atom c1 es1) (Atom c2 es2) = do
+  when (c1 /= c2) do throwNothing
+  when ((es1 & length) /= (es2 & length)) do throwNothing
   let n = c1
   es <- zipWithM unifyExpr es1 es2
   -- TODO: is this really necessary? seems like it might be...
-  es' <- normExpr =<<$> es
+  es' <- traverse normExpr es
   pure $ Atom n es'
 
-unifyExpr :: (Monad m, Ord v, Eq c, Pretty v, Pretty c) => Expr c v -> Expr c v -> UnificationT a c v m (Expr c v)
+unifyExpr :: (Ord v, Eq c, Pretty v, Pretty c) => Expr c v -> Expr c v -> UnificationT c v (Expr c v)
 unifyExpr e1 e2 = do
   e1' <- normExpr e1
   e2' <- normExpr e2
-  tellMsg $
-    (Msg.mk 5 "unifyExpr")
-      { Msg.contents =
-          [ "e1 =" <+> pPrint e1',
-            "e2 =" <+> pPrint e2'
-          ]
-      }
-       
   unifyExpr' e1' e2'
 
-unifyExpr' :: (Monad m, Ord v, Eq c, Pretty v, Pretty c) => Expr c v -> Expr c v -> UnificationT a c v m (Expr c v)
+unifyExpr' :: (Ord v, Eq c, Pretty v, Pretty c) => Expr c v -> Expr c v -> UnificationT c v (Expr c v)
 unifyExpr' e1 e2 | e1 == e2 = return e2
 unifyExpr' (VarExpr x1) e2 = do
   setVarM x1 e2
@@ -186,8 +155,8 @@ unifyExpr' e1 (VarExpr x2) = do
   return e1
 unifyExpr' e1@(ConExpr (Con _ _)) e2@(ConExpr (Con _ _)) = do
   ctx <- ask
-  e1' <- normHeadAliasesInExpr ctx.exprAliases ctx.doLogging e1
-  e2' <- normHeadAliasesInExpr ctx.exprAliases ctx.doLogging e2
+  let e1' = normHeadAliasesInExpr ctx.exprAliases e1
+  let e2' = normHeadAliasesInExpr ctx.exprAliases e2
   case (e1', e2') of
     (VarExpr x1, _) -> do
       setVarM x1 e2'
@@ -196,16 +165,18 @@ unifyExpr' e1@(ConExpr (Con _ _)) e2@(ConExpr (Con _ _)) = do
       setVarM x2 e1'
       return e1'
     (c1 :% es1, c2 :% es2) | c1 == c2 -> do
-      when ((es1 & length) /= (es2 & length)) do throwError $ ExprsError e1' e2'
+      when ((es1 & length) /= (es2 & length)) do throwNothing
       let c = c1 -- = c2
       es <- zipWithM unifyExpr es1 es2
       pure $ c :% es
-    _ -> throwError $ ExprsError e1' e2'
+    _ -> throwNothing
 
-normExpr :: (Monad m, Ord v) => Expr c v -> UnificationT a c v m (Expr c v)
+normExpr :: Ord v => Expr c v -> UnificationT c v (Expr c v)
 normExpr = liftA2 substExpr (gets sigma) . return
 
-normEnv :: (Monad m, Eq c, Ord v) => UnificationT a c v m ()
+-- Repeatedly applies substitution to itself until it stabilizes
+-- When we rely on this, it is a major bottleneck.
+normEnv :: (Eq c, Ord v) => UnificationT c v ()
 normEnv = do
   sigma' <-
     gets sigma
@@ -216,25 +187,31 @@ normEnv = do
               & Map.traverseWithKey
                 ( \x e ->
                     if x `Set.member` varsExpr e
-                      then throwError $ OccursError x e
+                      then throwNothing
                       else return $ substExpr s e
                 )
               & fmap Subst
         )
   put $ Env sigma'
 
-setVarM :: (Monad m, Ord v, Eq c, Pretty v, Pretty c) => Var v -> Expr c v -> UnificationT a c v m ()
+{-# SCC setVarM #-}
+setVarM :: (Ord v, Eq c, Pretty v, Pretty c) => Var v -> Expr c v -> UnificationT c v ()
 setVarM x e = do
-  tellMsg $ Msg.mk 4 $ "setVarM" <+> pPrint x <+> pPrint e
   -- if 'x' occurs in 'e', then is a cyclic substitution, which is inconsistent
-  when (Set.member x (varsExpr e)) do throwError $ ExprsError (VarExpr x) e
+  when (Set.member x (varsExpr e)) do throwNothing
   e' <-
     gets (substVar . sigma) <*> return x >>= \case
       Nothing -> return e
       -- if 'x' is already substituted, then must unify the old substitute 'e'
       -- with the new substitute 'e''
       Just e' -> do
-        tellMsg $ Msg.mk 4 $ "[setVarM]" <+> pPrint x <+> "was already substituted, so must check: " <+> pPrint e <+> "~" <+> pPrint e'
         unifyExpr e e'
   sigma' <- gets sigma
   put $ Env (setVar x e' sigma')
+
+
+normHeadAliasesInExpr :: (Pretty c, Pretty v) => [ExprAlias c v] -> Expr c v -> Expr c v
+normHeadAliasesInExpr exprAliases e = do
+  case exprAliases `applyExprAlias` e of
+    Nothing -> e
+    Just e' -> normHeadAliasesInExpr exprAliases e'

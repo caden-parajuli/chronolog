@@ -1,9 +1,9 @@
 name: chronolog
-version: 0.1.1.0
-github: "rybla/chronolog"
+version: 0.2.0.0
+github: "caden-parajuli/chronolog"
 license: BSD-3-Clause
 author: "Henry Blanchette"
-maintainer: "henry@rybl.net"
+maintainer: "caden.parajuli@bc.edu"
 copyright: "MIT"
 
 extra-source-files:
@@ -37,13 +37,9 @@ dependencies:
   - containers
   - vector
   - parallel
-  - pipes
   - pretty
-  - newtype-generics
   - lens
   - listsafe
-  - singletons # probably can remove this
-  - singletons-th # probably can remove this
 
 build-tools:
   - alex

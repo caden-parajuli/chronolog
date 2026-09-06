@@ -65,10 +65,7 @@ ex1_tests =
             [ ExprAlias \case
                 Swap (Tuple x y) -> Just $ Tuple y x
                 _ -> Nothing
-            ],
-          strategy = DepthFirstStrategy defaultDepthFirstStrategyOpts,
-          useIndexing = True,
-          doLogging = True
+            ]
         }
 
 pattern A :: Expr C V

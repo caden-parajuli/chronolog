@@ -47,6 +47,7 @@ tests =
                     _ -> False
                 )
                 EngineSuccessWithSuspends,
-              mkTest_ex1 "without_suspend" Nothing (EngineError OutOfGas)
+              -- mkTest_ex1 "without_suspend" Nothing (EngineError OutOfGas)
+              mkTest_ex1 "without_suspend" Nothing EngineFailure
             ]
       ]

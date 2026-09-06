@@ -9,12 +9,11 @@ module Spec.Engine.Common where
 import Control.Category ((>>>))
 import Control.Monad (when)
 import Control.Monad.Except (runExceptT)
-import Control.Monad.Writer (WriterT (runWriterT))
+import Control.Monad.Writer (WriterT)
 import Chronolog.Common.Msg (Msg)
 import qualified Chronolog.Common.Msg as Msg
 import Chronolog.Engine as Engine
 import Chronolog.Grammar
-import Chronolog.Html (renderHtml, renderTrace)
 import Data.Foldable (traverse_)
 import Data.Function ((&))
 import Data.Functor ((<&>))
@@ -51,11 +50,7 @@ type V = String
 -- A `EngineResult` has some optional associated metadata about how the run
 -- went.
 data EngineResult c v
-  = -- | Engine run threw a global error (in `Chronolog.Common.T`).
-    EngineErrorCatastrophic (Maybe Msg)
-  | -- | Engine run threw a local error.
-    EngineError Engine.Error
-  | -- | Engine run resulted in no branches that solved all goals.
+  = -- | Engine run resulted in no branches that solved all goals.
     EngineFailure
   | -- |
     -- Engine run resulted in at least one branch that solved all goals and
@@ -76,8 +71,6 @@ data EngineResult c v
   deriving (Show, Eq)
 
 instance (Pretty c, Pretty v) => Pretty (EngineResult c v) where
-  pPrint (EngineErrorCatastrophic err) = "catastrophic error:" <+> pPrint err
-  pPrint (EngineError err) = "error:" <+> pPrint err
   pPrint EngineFailure = "failure"
   pPrint EngineSuccess = "success"
   pPrint EngineSuccessWithSuspends = "success with suspends"
@@ -85,50 +78,18 @@ instance (Pretty c, Pretty v) => Pretty (EngineResult c v) where
   pPrint (EngineSuccessWithSolutionsCount n) = "success with" <+> pPrint n <+> "solutions"
   pPrint (EngineSuccessWithSubst _) = "success with subst"
 
-mkTest_Engine_visualization :: forall a c v. (Pretty a, Ord a, Show a, Pretty c, Pretty v, Ord v, Ord c, Show c, Show v) => TestName -> String -> Engine.Config a c v -> TestTree
-mkTest_Engine_visualization testName fileName cfg = goldenVsString testName ("html" </> fileName) do
-  (err_or_envs, _msgs) <-
-    Engine.runConfig cfg
-      & runWriterT
-      & runExceptT
-      & runWriterT
-
-  let content = case err_or_envs of
-        Left _err -> "<div>catastrophic error</div>"
-        Right (_, tr) -> renderTrace cfg tr
-
-  return . fromString . render . renderHtml "style.css" $ content
-
 mkTest_Engine :: forall a c v. (Pretty a, Ord a, Show a, Pretty c, Pretty v, Ord v, Ord c, Show c, Show v) => TestName -> Engine.Config a c v -> EngineResult c v -> TestTree
 mkTest_Engine testName cfg result_expected = testCase (render (text testName <+> brackets (pPrint result_expected))) do
-  (err_or_envs, msgs) <-
-    Engine.runConfig cfg
-      & (runWriterT >>> fmap fst)
-      & runExceptT
-      & runWriterT
+  let envs = Engine.runConfig cfg
 
   putStrLn "\n\n"
-  print (fmap pPrint err_or_envs)
+  print (fmap pPrint envs)
   putStrLn "\n\n"
 
-  mb_err :: Maybe Doc <- case err_or_envs of
-    Left err -> case result_expected of
-      EngineErrorCatastrophic Nothing -> return Nothing
-      EngineErrorCatastrophic (Just err')
-        | err == err' -> return Nothing
-        | otherwise -> return $ Just $ pPrint $ EngineErrorCatastrophic @c @v (Just err)
-      _ -> return $ Just $ pPrint $ EngineErrorCatastrophic @c @v (Just err)
-    Right (Left (err, _env)) -> case result_expected of
-      EngineError err'
-        | err == err' -> return Nothing
-        | otherwise -> return $ Just $ pPrint $ EngineError @c @v err
-      _ -> return $ Just $ pPrint $ EngineError @c @v err
-    Right (Right envs)
-      | envs_successful <- envs & filter \env -> null env.failedGoals,
+  mb_err :: Maybe Doc <- case envs of
+    _ | envs_successful <- envs & filter \env -> null env.failedGoals,
         not (null envs_successful) ->
           case result_expected of
-            EngineErrorCatastrophic _ -> return $ Just $ pPrint $ EngineSuccess @c @v
-            EngineError _ -> return $ Just $ pPrint $ EngineSuccess @c @v
             EngineFailure -> return $ Just $ pPrint $ EngineSuccess @c @v
             --
             EngineSuccess -> return Nothing
@@ -185,13 +146,6 @@ mkTest_Engine testName cfg result_expected = testCase (render (text testName <+>
   case mb_err of
     Nothing -> return ()
     Just err -> do
-      case Config.verbosity of
-        Config.LoggingVerbosity l -> do
-          let prefix = brackets $ "test " <> text (show testName)
-          putStrLn . render $ prefix <+> "BEGIN logs"
-          msgs & traverse_ \msg -> when (msg.level <= l) do putStrLn . render $ prefix <+> pPrint msg
-          putStrLn . render $ prefix <+> "END logs"
-        _ -> return ()
       assertFailure . render $
         vcat
           [ "expected :" <+> pPrint result_expected,

@@ -38,16 +38,12 @@ mkTest a b =
     ("`" <> displayExpr a <> "  <:  " <> displayExpr b <> "`")
     ( Engine.Config
         { initialGas = FiniteGas 50,
-          strategy = DepthFirstStrategy defaultDepthFirstStrategyOpts,
           rules = rulesSubtyping,
           exprAliases = [],
           goals = [mkGoal 0 $ a :<: b],
           shouldSuspend = \case
             Goal {atom = VarExpr _ :<: VarExpr _} -> True
-            _ -> False,
-          useIndexing = True,
-          doLogging = True
-
+            _ -> False
         }
     )
 

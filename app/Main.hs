@@ -1,118 +1,65 @@
--- {-# LANGUAGE OverloadedStrings #-}
--- {-# LANGUAGE TypeApplications #-}
--- {-# OPTIONS_GHC -Wno-orphans #-}
-
 module Main (main) where
 
--- import Control.Monad (void)
--- import Control.Monad.Except (runExceptT)
--- import Control.Monad.Writer (WriterT (runWriterT))
--- import qualified Chronolog.Engine as Engine
--- import Chronolog.Grammar
--- import Data.String (IsString (fromString))
--- import Text.PrettyPrint (hang, render)
--- import Text.PrettyPrint.HughesPJClass (Pretty (pPrint))
--- import Utility
-
--- rulesSubtyping :: [Rule]
--- rulesSubtyping =
---   [ Rule
---       { name = "bool <: bool",
---         hyps = [],
---         conc = bool `subtype` bool
---       },
---     Rule
---       { name = "int <: int",
---         hyps = [],
---         conc = int `subtype` int
---       },
---     Rule
---       { name = "nat <: nat",
---         hyps = [],
---         conc = nat `subtype` nat
---       },
---     Rule
---       { name = "nat <: int",
---         hyps = [],
---         conc = nat `subtype` int
---       },
---     Rule
---       { name = "a' <: a , b <: b'  |-  a -> b <: a' -> b'",
---         hyps =
---           [ GoalHyp $ a' `subtype` a,
---             GoalHyp $ b `subtype` b'
---           ],
---         conc = (a `arr` b) `subtype` (a' `arr` b')
---       }
---       {- Rule
---         { name = "map",
---           hyps =
---             [ GoalHyp $ (a `arr` b) `subtype` (a' `arr` b'),
---               GoalHyp $ functor f
---             ],
---           conc = (a `arr` b) `subtype` ((f `app` a) `arr` (f `app` b))
---         } -}
---   ]
---   where
---     (f, a, a', b, b') = ("f", "a", "a'", "b", "b'")
-
--- -- atoms
-
--- subtype :: Expr -> Expr -> Atom
--- subtype a b = Atom "subtype" $ ConExpr (Con "subtype" [a, b])
-
--- functor :: Expr -> Atom
--- functor f = Atom "functor" $ ConExpr (Con "functor" [f])
-
--- -- expressions
-
--- var :: String -> Expr
--- var x = VarExpr (Var x Nothing)
-
--- instance IsString Expr where fromString = var
-
--- int :: Expr
--- int = ConExpr (Con "int" [])
-
--- nat :: Expr
--- nat = ConExpr (Con "nat" [])
-
--- bool :: Expr
--- bool = ConExpr (Con "bool" [])
-
--- arr :: Expr -> Expr -> Expr
--- arr a b = ConExpr (Con "arr" [a, b])
-
--- app :: Expr -> Expr -> Expr
--- app f a = ConExpr (Con "app" [f, a])
-
--- main :: IO ()
--- main = do
---   let cfg =
---         Engine.Config
---           { initialGas = 100,
---             rules = rulesSubtyping,
---             -- goals = [subtype (arr "x" "y") (arr "x'" "y'")],
---             goals = ["x" `subtype` ("y" `arr` "z")],
---             shouldSuspend = \case
---               Atom _ (ConExpr (Con "subtype" [VarExpr _, VarExpr _])) -> True
---               _ -> False
---           }
---   (err_or_envs, msgs) <-
---     Engine.run cfg
---       & runExceptT
---       & runWriterT
---   putStrLn "================================"
---   putStrLn " logs "
---   putStrLn "================================"
---   void $ msgs <&>>= \msg -> putStrLn $ render $ pPrint msg
---   putStrLn "================================"
---   putStrLn " result "
---   putStrLn "================================"
---   case err_or_envs of
---     Left err -> putStrLn $ render (hang "err:" 2 $ pPrint err)
---     Right envs -> putStrLn $ render (hang "envs:" 2 $ bullets (envs <&> pPrint))
---   return ()
+import qualified Chronolog.Engine as Engine
+import Chronolog.Grammar
+import Text.PrettyPrint.HughesPJClass (Pretty (pPrint), render, text, (<+>))
+import qualified Data.List as List
 
 main :: IO ()
-main = return ()
+main = mkAddTest 7 8 15
+
+mkAddTest :: Int -> Int -> Int -> IO ()
+mkAddTest a b c = do
+  putStrLn (render $ pPrint a <+> text "+" <+> pPrint b <+> text "=" <+> pPrint c)
+  let cfg =
+        Engine.Config
+          { rules = rulesAdd
+          , exprAliases = []
+          , initialGas = Engine.InfiniteGas
+          , goals = [mkGoal 0 $ eq (plus (fromInt a) (fromInt b)) (fromInt c)]
+          , shouldSuspend = const False
+          }
+  let branches' = Engine.runConfig cfg
+  let numSolutions = List.length branches'
+  putStrLn $ show numSolutions ++ " solutions found"
+
+type A = String
+type C = String
+type V = String
+
+rulesAdd :: [Rule A C V]
+rulesAdd =
+  [ mkRule (RuleName "0+")
+      []
+      $ (zero `plus` x) `eq` x
+  , mkRule (RuleName "+0")
+      []
+      $ (x `plus` zero) `eq` x
+  , mkRule (RuleName "S+")
+      [GoalHyp . mkHypGoal $ (x `plus` y) `eq` z]
+      $ (s x `plus` y) `eq` s z
+  , mkRule (RuleName "+S")
+      [GoalHyp . mkHypGoal $ (x `plus` y) `eq` z]
+      $ (x `plus` s y) `eq` s z
+  ]
+  where
+    (x, z, y) = (var "x", var "y", var "z")
+
+eq :: Expr C V -> Expr C V -> Atom A C V
+eq x y = Atom "Equal" [x, y]
+
+plus :: Expr C V -> Expr C V -> Expr C V
+plus x y = ConExpr (Con "Add" [x, y])
+
+var :: V -> Expr C V
+var v = VarExpr (Var v Nothing)
+
+s :: Expr C V -> Expr C V
+s x = ConExpr (Con "S" [x])
+
+zero :: Expr C V
+zero = ConExpr (Con "Z" [])
+
+fromInt :: Int -> Expr C V
+fromInt 0 = zero
+fromInt x = s (fromInt (x - 1))
